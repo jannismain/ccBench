@@ -19,10 +19,10 @@ ccBench is a benchmarking suite designed to evaluate the performance of various 
 2. Fill in required secrets.
 
    Some configurations require API keys or other secrets to function properly.
-   For example, if you are using the `claude_code_models_via_portkey` configuration, you need to set up the `.env` file with your Portkey API key.
+   For example, if you are using the `portkey_for_claude_code` configuration, you need to set up the `.env` file with your Portkey API key.
 
     ```bash
-    cd config_forge/claude_code_models_via_portkey
+    cd config_forge/portkey_for_claude_code
     cp .env.sample .env
     # Edit .env to add your Portkey API key
     ```

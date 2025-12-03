@@ -4,5 +4,3 @@ tasks:
 
 configs:
   - claude_code
-  - claude_code_models_via_portkey
-  - initial_prompt

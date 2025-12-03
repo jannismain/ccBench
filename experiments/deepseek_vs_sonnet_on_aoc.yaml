@@ -1,0 +1,11 @@
+tasks:
+  - aoc_2025_01
+
+variants:
+  sonnet:
+    - portkey_for_claude_code
+  deepseek_v32:
+    - deepseek_v32_for_claude_code
+
+configs:
+  - claude_code

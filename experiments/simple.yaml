@@ -1,0 +1,5 @@
+tasks:
+  - aoc_2025_01
+
+configs:
+  - claude_code

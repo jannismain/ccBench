@@ -43,45 +43,71 @@ experiment_tasks_root.mkdir()
 # copy all task files into the project directory
 experiment_task_dirs = []
 for task in experiment_config["tasks"]:
-    experiment_task_root = experiment_tasks_root / task
-    experiment_task_root.mkdir()
-    experiment_task_dirs.append(experiment_task_root)
+    # Determine what variants to process
+    variants_to_process = []
+    if "variants" in experiment_config and experiment_config["variants"]:
+        variants_to_process = list(experiment_config["variants"].items())
+    else:
+        # No variants, use empty string as variant name
+        variants_to_process = [("", [])]
 
-    # copy all files of each config shard into the task directory
-    project_dir = experiment_task_root / "project"
-    project_dir.mkdir()
-    for config_shard in experiment_config["configs"]:
-        d = Path(FORGE / config_shard)
-        for f in d.glob("*"):
+    for variant_name, variant_configs in variants_to_process:
+        # Create task directory with variant suffix if applicable
+        if variant_name:
+            experiment_task_root = experiment_tasks_root / f"{task}_{variant_name}"
+        else:
+            experiment_task_root = experiment_tasks_root / task
+
+        experiment_task_root.mkdir()
+        experiment_task_dirs.append(experiment_task_root)
+
+        # copy all files of each config shard into the task directory
+        project_dir = experiment_task_root / "project"
+        project_dir.mkdir()
+
+        # Copy base configs
+        for config_shard in experiment_config["configs"]:
+            d = Path(FORGE / config_shard)
+            for f in d.glob("*"):
+                f.copy_into(project_dir)
+
+        # Copy variant-specific configs (if any)
+        for config_shard in variant_configs:
+            d = Path(FORGE / config_shard)
+            for f in d.glob("*"):
+                f.copy_into(project_dir)
+
+        task_dir = TASKS / task
+        for f in task_dir.glob("*"):
             f.copy_into(project_dir)
 
-    task_dir = TASKS / task
-    for f in task_dir.glob("*"):
-        f.copy_into(project_dir)
+        # move entrypoint and prompt into experiment task root
+        entrypoint = project_dir / "run.sh"
+        if not entrypoint.exists():
+            sys.exit(f"Experiment entrypoint '{entrypoint}' not found.")
+        entrypoint.move_into(experiment_task_root)
 
-    # move entrypoint and prompt into experiment task root
-    entrypoint = project_dir / "run.sh"
-    if not entrypoint.exists():
-        sys.exit(f"Experiment entrypoint '{entrypoint}' not found.")
-    entrypoint.move_into(experiment_task_root)
+        prompt_file = project_dir / "prompt.md"
+        if not prompt_file.exists():
+            sys.exit(f"Experiment prompt file '{prompt_file}' not found.")
+        prompt_file.move_into(experiment_task_root)
 
-    prompt_file = project_dir / "prompt.md"
-    if not prompt_file.exists():
-        sys.exit(f"Experiment prompt file '{prompt_file}' not found.")
-    prompt_file.move_into(experiment_task_root)
+        os.chdir(experiment_task_root)
 
-    os.chdir(experiment_task_root)
-
-    # create INITIAL_FILES manifest
-    Path("INITIAL_FILES").write_text(
-        "\n".join(
-            [str(f.relative_to(experiment_task_root)) for f in project_dir.glob("*")]
+        # create INITIAL_FILES manifest
+        Path("INITIAL_FILES").write_text(
+            "\n".join(
+                [str(f.relative_to(experiment_task_root)) for f in project_dir.glob("*")]
+            )
+            + "\n"
         )
-        + "\n"
-    )
-    os.system("chmod +x run.sh")
-    os.system("git init && git add . && git commit -m 'Initial commit'")
-    os.system("./run.sh")
+        os.system("chmod +x run.sh")
+        os.system("git init && git add . && git commit -m 'Initial commit'")
 
-    # Count lines of code of solution files
-    os.system("cloc --exclude-list-file=INITIAL_FILES --json project > cloc.json")
+        # Print task label with variant information
+        task_label = f"{task} with variant {variant_name}" if variant_name else task
+        print(f"Running task: {task_label}")
+        os.system("./run.sh")
+
+        # Count lines of code of solution files
+        os.system("cloc --exclude-list-file=INITIAL_FILES --json project > cloc.json")
