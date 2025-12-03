@@ -1,0 +1,10 @@
+[project]
+name = "ccbench"
+version = "0.1.0"
+description = "A versatile evaluation suite for coding agents."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = ["pyyaml"]
+
+[tool.ruff]
+line-length = 94
