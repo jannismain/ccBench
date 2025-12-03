@@ -1,4 +1,6 @@
-task: aoc_2025_01
+tasks:
+  - aoc_2025_01
+  - aoc_2025_02
 
 configs:
   - claude_code

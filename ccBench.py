@@ -37,43 +37,51 @@ experiment_file.copy_into(experiment_root)
 with experiment_file.open() as f:
     experiment_config = yaml.safe_load(f)
 
-experiment_agent_root = experiment_root / "project"
-experiment_agent_root.mkdir()
-
-# copy all files of each config shard into the project directory
-for config_shard in experiment_config["configs"]:
-    d = Path(FORGE / config_shard)
-    for f in d.glob("*"):
-        f.copy_into(experiment_agent_root)
+experiment_tasks_root = experiment_root / "tasks"
+experiment_tasks_root.mkdir()
 
 # copy all task files into the project directory
-task_dir = TASKS / experiment_config["task"]
-for f in task_dir.glob("*"):
-    f.copy_into(experiment_agent_root)
+experiment_task_dirs = []
+for task in experiment_config["tasks"]:
+    experiment_task_root = experiment_tasks_root / task
+    experiment_task_root.mkdir()
+    experiment_task_dirs.append(experiment_task_root)
 
-# move entrypoint and prompt into experiment root
-entrypoint = experiment_agent_root / "run.sh"
-if not entrypoint.exists():
-    sys.exit(f"Experiment entrypoint '{entrypoint}' not found.")
-entrypoint.move_into(experiment_root)
+    # copy all files of each config shard into the task directory
+    project_dir = experiment_task_root / "project"
+    project_dir.mkdir()
+    for config_shard in experiment_config["configs"]:
+        d = Path(FORGE / config_shard)
+        for f in d.glob("*"):
+            f.copy_into(project_dir)
 
-prompt_file = experiment_agent_root / "prompt.md"
-if not prompt_file.exists():
-    sys.exit(f"Experiment prompt file '{prompt_file}' not found.")
-prompt_file.move_into(experiment_root)
+    task_dir = TASKS / task
+    for f in task_dir.glob("*"):
+        f.copy_into(project_dir)
 
-os.chdir(experiment_root)
+    # move entrypoint and prompt into experiment task root
+    entrypoint = project_dir / "run.sh"
+    if not entrypoint.exists():
+        sys.exit(f"Experiment entrypoint '{entrypoint}' not found.")
+    entrypoint.move_into(experiment_task_root)
 
-# create INITIAL_FILES manifest
-Path("INITIAL_FILES").write_text(
-    "\n".join(
-        [str(f.relative_to(experiment_root)) for f in experiment_agent_root.glob("*")]
+    prompt_file = project_dir / "prompt.md"
+    if not prompt_file.exists():
+        sys.exit(f"Experiment prompt file '{prompt_file}' not found.")
+    prompt_file.move_into(experiment_task_root)
+
+    os.chdir(experiment_task_root)
+
+    # create INITIAL_FILES manifest
+    Path("INITIAL_FILES").write_text(
+        "\n".join(
+            [str(f.relative_to(experiment_task_root)) for f in project_dir.glob("*")]
+        )
+        + "\n"
     )
-    + "\n"
-)
-os.system("chmod +x run.sh")
-os.system("git init && git add . && git commit -m 'Initial commit'")
-os.system("./run.sh")
+    os.system("chmod +x run.sh")
+    os.system("git init && git add . && git commit -m 'Initial commit'")
+    os.system("./run.sh")
 
-# Evaluate results
-os.system("cloc --exclude-list-file=INITIAL_FILES project")
+    # Count lines of code of solution files
+    os.system("cloc --exclude-list-file=INITIAL_FILES --json project > cloc.json")
