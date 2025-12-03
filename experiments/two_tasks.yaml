@@ -4,3 +4,6 @@ tasks:
 
 configs:
   - claude_code
+
+evals:
+  - cloc
