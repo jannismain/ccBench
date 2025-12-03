@@ -1,0 +1,5 @@
+experiments/**/*
+!experiments/*.yaml
+!config_forge/**/*
+config_forge/**/.env
+!tasks/**/*
