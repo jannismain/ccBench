@@ -9,3 +9,7 @@ variants:
 
 configs:
   - claude_code
+
+evals:
+  - cloc
+  - claude_code_metrics
