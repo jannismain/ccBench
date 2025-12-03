@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 FORGE = Path(__file__).with_name("config_forge")
 TASKS = Path(__file__).with_name("tasks")
 ROOT = Path(__file__).with_name("experiments")
+EVALS = Path(__file__).with_name("evals")
 
 # Create experiment directory
 experiment_file = ROOT / sys.argv[1]
@@ -109,5 +110,6 @@ for task in experiment_config["tasks"]:
         print(f"Running task: {task_label}")
         os.system("./run.sh")
 
-        # Count lines of code of solution files
-        os.system("cloc --exclude-list-file=INITIAL_FILES --json project > cloc.json")
+        for eval_config in experiment_config["evals"]:
+            eval_dir = EVALS / eval_config
+            os.system(eval_dir / "run.sh")
