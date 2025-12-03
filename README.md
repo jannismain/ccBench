@@ -1,6 +1,6 @@
-# ccBench - Coding Characteristics Benchmarking Suite for Agentic Coding Tools
+# ccBench - Code Creation Benchmarking Suite for Coding Agents
 
-ccBench is a benchmarking suite designed to evaluate the performance of various agentic coding tools and configurations on solving various tasks. It provides a standardized framework to test and compare how effectively different tooling variants can generate solutions to predefined tasks.
+ccBench is a benchmarking suite designed to evaluate the performance of various coding agents on solving various tasks. It provides a standardized framework to test and compare how effectively different tooling variants can generate solutions to predefined tasks.
 
 ## Prerequisites
 
