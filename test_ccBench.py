@@ -203,6 +203,49 @@ class TestCopyFileWithJsonMerge:
         result = json.loads(target_json.read_text())
         assert result == {"existing": "value", "new": "value"}
 
+    def test_merge_claude_settings_in_directory(self, temp_source, temp_target):
+        """Test merging .claude/settings.json specifically (real-world scenario)."""
+        # Create base claude_code config with base settings
+        base_claude_dir = temp_target / ".claude"
+        base_claude_dir.mkdir()
+        base_settings = base_claude_dir / "settings.json"
+        base_settings.write_text(
+            json.dumps(
+                {
+                    "model": "sonnet",
+                    "hooks": {"pre-commit": ["lint"]},
+                    "mcpServers": {"filesystem": {"command": "fs-server"}},
+                }
+            )
+        )
+
+        # Create tdd_guard config overlay
+        overlay_claude_dir = temp_source / ".claude"
+        overlay_claude_dir.mkdir()
+        overlay_settings = overlay_claude_dir / "settings.json"
+        overlay_settings.write_text(
+            json.dumps(
+                {
+                    "hooks": {"pre-commit": ["tdd-guard"]},
+                    "mcpServers": {"tdd-guard": {"command": "tdd-guard-server"}},
+                }
+            )
+        )
+
+        # Copy and merge
+        copy_file_with_json_merge(overlay_claude_dir, temp_target)
+
+        # Verify deep merge preserved both configs
+        result = json.loads(base_settings.read_text())
+        assert result == {
+            "model": "sonnet",
+            "hooks": {"pre-commit": ["lint", "tdd-guard"]},
+            "mcpServers": {
+                "filesystem": {"command": "fs-server"},
+                "tdd-guard": {"command": "tdd-guard-server"},
+            },
+        }
+
     def test_copy_nested_directories(self, temp_source, temp_target):
         """Test copying nested directory structures."""
         source_dir = temp_source / "parent"
