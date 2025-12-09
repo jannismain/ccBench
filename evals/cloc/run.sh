@@ -1,1 +1,1 @@
-cloc --exclude-list-file=INITIAL_FILES --json project > cloc.json
+cloc --exclude-list-file=INITIAL_FILES --exclude-dir .venv --json project > cloc.json
