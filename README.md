@@ -51,7 +51,6 @@ uv run ccBench.py tdd_guard.yaml
 # Run baseline variant only
 uv run ccBench.py tdd_guard.yaml --variant with_tdd_guard
 ```
-```
 
 ## Available Evaluations
 
