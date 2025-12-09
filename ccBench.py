@@ -135,13 +135,13 @@ if __name__ == "__main__":
     )
     experiment_root.mkdir(parents=True, exist_ok=True)
     experiment_file.copy_into(experiment_root)
-    
+
     with experiment_file.open() as f:
         experiment_config = yaml.safe_load(f)
-    
+
     experiment_tasks_root = experiment_root / "tasks"
     experiment_tasks_root.mkdir()
-    
+
     # copy all task files into the project directory
     experiment_task_dirs = []
     for task in experiment_config["tasks"]:
@@ -149,7 +149,7 @@ if __name__ == "__main__":
         variants_to_process = []
         if "variants" in experiment_config and experiment_config["variants"]:
             all_variants = list(experiment_config["variants"].items())
-    
+
             # Filter by specified variant if provided
             if args.variant:
                 matching_variants = [
@@ -157,7 +157,9 @@ if __name__ == "__main__":
                 ]
                 if not matching_variants:
                     print(f"Error: Variant '{args.variant}' not found in experiment.")
-                    print(f"Available variants: {', '.join([name for name, _ in all_variants])}")
+                    print(
+                        f"Available variants: {', '.join([name for name, _ in all_variants])}"
+                    )
                     exit(1)
                 variants_to_process = matching_variants
             else:
@@ -168,50 +170,50 @@ if __name__ == "__main__":
                 print("Error: --variant specified but experiment has no variants.")
                 exit(1)
             variants_to_process = [("", [])]
-    
+
         for variant_name, variant_configs in variants_to_process:
             # Create task directory with variant suffix if applicable
             if variant_name:
                 experiment_task_root = experiment_tasks_root / f"{task}_{variant_name}"
             else:
                 experiment_task_root = experiment_tasks_root / task
-    
+
             experiment_task_root.mkdir()
             experiment_task_dirs.append(experiment_task_root)
-    
+
             # copy all files of each config shard into the task directory
             project_dir = experiment_task_root / "project"
             project_dir.mkdir()
-    
+
             # Copy base configs
             for config_shard in experiment_config["configs"]:
                 d = Path(FORGE / config_shard)
                 for f in d.glob("*"):
                     copy_file_with_json_merge(f, project_dir)
-    
+
             # Copy variant-specific configs (if any)
             for config_shard in variant_configs:
                 d = Path(FORGE / config_shard)
                 for f in d.glob("*"):
                     copy_file_with_json_merge(f, project_dir)
-    
+
             task_dir = TASKS / task
             for f in task_dir.glob("*"):
                 f.copy_into(project_dir)
-    
+
             # move entrypoint and prompt into experiment task root
             entrypoint = project_dir / "run.sh"
             if not entrypoint.exists():
                 sys.exit(f"Experiment entrypoint '{entrypoint}' not found.")
             entrypoint.move_into(experiment_task_root)
-    
+
             prompt_file = project_dir / "prompt.md"
             if not prompt_file.exists():
                 sys.exit(f"Experiment prompt file '{prompt_file}' not found.")
             prompt_file.move_into(experiment_task_root)
-    
+
             os.chdir(experiment_task_root)
-    
+
             # create INITIAL_FILES manifest
             Path("INITIAL_FILES").write_text(
                 "\n".join(
@@ -221,7 +223,7 @@ if __name__ == "__main__":
             )
             os.system("chmod +x run.sh")
             os.system("git init && git add . && git commit -m 'Initial commit'")
-    
+
             # Run setup script if it exists in the project directory
             setup_script = project_dir / "setup.sh"
             if setup_script.exists():
@@ -230,12 +232,12 @@ if __name__ == "__main__":
                 result = os.system(f"cd {project_dir} && ./setup.sh")
                 if result != 0:
                     print(f"Warning: Setup script exited with code {result}")
-    
+
             # Print task label with variant information
             task_label = f"{task} with variant {variant_name}" if variant_name else task
             print(f"Running task: {task_label}")
             os.system("./run.sh")
-    
+
             for eval_config in experiment_config["evals"]:
                 eval_dir = EVALS / eval_config
                 os.system(eval_dir / "run.sh")
