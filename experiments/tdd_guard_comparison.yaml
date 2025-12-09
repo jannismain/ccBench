@@ -1,0 +1,15 @@
+tasks:
+  - aoc_2025_01
+
+variants:
+  baseline:
+    []
+  with_tdd_guard:
+    - tdd_guard_for_claude_code
+
+configs:
+  - claude_code
+
+evals:
+  - cloc
+  - claude_code_metrics

@@ -1,0 +1,2 @@
+[tool.pytest.ini_options]
+tdd_guard_project_root = "/Users/username/projects/my-app"
