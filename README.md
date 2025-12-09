@@ -29,10 +29,28 @@ ccBench is a benchmarking suite designed to evaluate the performance of various 
 
 ## Running Experiments
 
+### Basic Usage
+
 To run an experiment, use the following command:
 
 ```bash
-uv run ccBench.py example.yaml
+uv run ccBench.py <experiment.yaml>
+```
+
+### Command-Line Options
+
+- `experiment` - Path to experiment YAML file (relative to `experiments/` directory)
+- `--variant NAME` - Run only the specified variant from the experiment (optional)
+
+### Examples
+
+```bash
+# Run all variants in an experiment
+uv run ccBench.py tdd_guard.yaml
+
+# Run baseline variant only
+uv run ccBench.py tdd_guard.yaml --variant with_tdd_guard
+```
 ```
 
 ## Available Evaluations
