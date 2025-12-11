@@ -114,7 +114,8 @@ def copy_file_with_json_merge(source: Path, target_dir: Path) -> None:
 
 FORGE = Path(__file__).with_name("config_forge")
 TASKS = Path(__file__).with_name("tasks")
-ROOT = Path(__file__).with_name("experiments")
+EXPERIMENTS = Path(__file__).with_name("experiments")
+RESULTS = Path(__file__).with_name("results")
 EVALS = Path(__file__).with_name("evals")
 
 
@@ -130,13 +131,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Create experiment directory
-    experiment_file = ROOT / args.experiment
+    experiment_file = EXPERIMENTS / args.experiment
     if not experiment_file.exists():
         print(f"Experiment '{experiment_file}' not found.")
         exit(1)
     experiment_name = experiment_file.stem
     experiment_root = (
-        ROOT
+        RESULTS
         / f"{datetime.now().isoformat(sep='_', timespec='seconds').replace(':', '').replace('-', '')}_{experiment_name}"
     )
     experiment_root.mkdir(parents=True, exist_ok=True)
