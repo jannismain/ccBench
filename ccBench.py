@@ -4,6 +4,7 @@
 # dependencies = [
 #     "pyyaml",
 #     "tomli-w",
+#     "coloredlogs",
 # ]
 # ///
 
@@ -16,11 +17,16 @@ import tomllib
 from datetime import datetime
 from pathlib import Path
 
+import coloredlogs
 import tomli_w
 import yaml
 
-logging.basicConfig(level=logging.DEBUG)
-log = logging.getLogger(__name__)
+log = logging.getLogger("ccBench")
+coloredlogs.install(
+    level=os.getenv("CCBENCH_LOG_LEVEL", "INFO"),
+    fmt="%(name)s %(levelname)-6s %(message)s (%(filename)s:%(lineno)d)",
+    logger=log,
+)
 
 
 def deep_merge_dict(base: dict, overlay: dict) -> dict:
