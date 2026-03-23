@@ -1,0 +1,25 @@
+tasks:
+  - cost-splitting-platform
+  - c4-stop-button
+
+variants:
+  baseline:
+    - claude_code
+  openspec:
+    - claude_code
+    - openspec:
+        env:
+          TOOLS: claude
+  bmad_full:
+    - bmad_install
+    - bmad_full_claude_code
+  bmad_quick:
+    - bmad_install
+    - bmad_quick_claude_code
+
+configs:
+  - portkey_for_claude_code
+
+evals:
+  - cloc
+  - claude_code_metrics
