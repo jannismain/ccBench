@@ -75,3 +75,19 @@ Extracts detailed performance metrics from Claude Code's `output.json` file, inc
 - **Web search requests:** Number of web searches performed
 
 **Output:** `claude_code_metrics.json` - Contains all extracted metrics in JSON format.
+
+### `llm_judge` - LLM-as-a-Judge Code Review
+
+Runs a post-task review using an LLM with the task prompt, the agent's `output.json` trace, and the code changes inside `project/`.
+
+- **Inputs:** `prompt.md` (or `JUDGE_PROMPT_FILE`), `output.json` (or `JUDGE_OUTPUT_JSON`), and the `project/` directory
+- **Outputs:** `llm_judge_review.md` (LLM review), `llm_judge_prompt.txt` (exact prompt sent), `llm_judge_meta.json` (provider/model/paths)
+- **Provider switching:** Set `LLM_JUDGE_PROVIDER` to `anthropic` or `openai`, and `LLM_JUDGE_MODEL` to the desired model (e.g., `claude-3-opus-20240229`, `gpt-4.1`, or a custom ID such as `gpt-5.4-codex`). Defaults pick a provider based on available API keys.
+- **Dry runs:** Set `LLM_JUDGE_DRY_RUN=1` to generate the review prompt without calling an LLM (useful when keys are unavailable).
+
+Add the shard to an experiment with:
+
+```yaml
+evals:
+  - llm_judge
+```
