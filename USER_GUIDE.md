@@ -2,19 +2,37 @@
 
 ## Config Shard System
 
-ccBench uses a modular configuration system called "config shards." Each shard is a directory in `config_forge/` that contains files to be copied into the experiment's project directory.
+ccBench uses a modular configuration system called "config shards." Each shard is a directory in `config_forge/` that contains files to be overlaid onto the experiment's task directory.
 
-### How Config Shards Work
+### How Task Assembly Works
 
 When setting up an experiment, ccBench:
-1. Creates a project directory for each task
-2. Copies files from base config shards (defined in `configs`)
-3. Copies files from variant-specific config shards (if using variants)
-4. Intelligently merges JSON and TOML files when conflicts occur
+
+1. Creates a task directory for each task with a `project/` subdirectory (the agent workspace)
+2. Copies the task files first to seed the task directory
+3. Overlays files from base config shards (defined in `configs`)
+4. Overlays files from variant-specific config shards (if using variants)
+5. Applies eval shards
+6. Intelligently merges JSON and TOML files when overlay conflicts occur
+
+For large tasks without `staging.sh`, the initial task copy uses a fast no-merge path. If a task defines `staging.sh`, it is staged and copied during its normal task phase instead.
+
+### File Routing
+
+Files in a shard are routed to two destinations:
+
+- **`project/` subdirectory** in the shard → copied into `project/` in the task directory (agent workspace)
+- **Everything else** at the shard root → copied into the task root directory (ccBench infrastructure)
+
+This keeps the agent workspace clean — only files the agent needs are in `project/`, while run scripts, eval scripts, and metrics stay at the task root.
+
+ccBench also ensures `project/` is the git repository the agent sees. If the task already provides a repo in `project/` (for example via `git clone` during staging), ccBench leaves that repo intact. Otherwise it creates an initial commit inside `project/`.
+
+The `cloc` eval uses that repository state to count only files changed in `project/`: tracked files from `git diff HEAD` plus untracked files.
 
 ### File Merging
 
-When config shards contain files with the same path, ccBench merges them instead of overwriting. This allows combining settings from multiple shards.
+The task is copied first without merge logic. After that, config and eval shards are applied as overlays. When an overlay shard contains a JSON or TOML file that already exists in the assembled task directory, ccBench merges it instead of overwriting it. This allows combining settings from multiple shards while keeping large task copies fast.
 
 #### What Gets Merged
 
@@ -42,6 +60,7 @@ The merging follows these rules:
 ##### Example 1: Simple Settings Merge
 
 **Base config** (`claude_code/.claude/settings.json`):
+
 ```json
 {
   "model": "sonnet",
@@ -49,7 +68,8 @@ The merging follows these rules:
 }
 ```
 
-**Overlay config** (`tdd_guard_for_claude_code/.claude/settings.json`):
+**Overlay config** (`portkey_for_claude_code/project/.claude/settings.json`):
+
 ```json
 {
   "maxTurns": 100,
@@ -58,6 +78,7 @@ The merging follows these rules:
 ```
 
 **Merged result**:
+
 ```json
 {
   "model": "sonnet",
@@ -69,6 +90,7 @@ The merging follows these rules:
 ##### Example 2: Nested Object Merge
 
 **Base config**:
+
 ```json
 {
   "hooks": {
@@ -83,43 +105,47 @@ The merging follows these rules:
 ```
 
 **Overlay config**:
+
 ```json
 {
   "hooks": {
-    "pre-commit": ["tdd-guard"]
+    "pre-commit": ["portkey"]
   },
   "mcpServers": {
-    "tdd-guard": {
-      "command": "tdd-guard-server"
+    "portkey": {
+      "command": "portkey-server"
     }
   }
 }
 ```
 
 **Merged result**:
+
 ```json
 {
   "hooks": {
-    "pre-commit": ["lint", "tdd-guard"]
+    "pre-commit": ["lint", "portkey"]
   },
   "mcpServers": {
     "filesystem": {
       "command": "fs-server"
     },
-    "tdd-guard": {
-      "command": "tdd-guard-server"
+    "portkey": {
+      "command": "portkey-server"
     }
   }
 }
 ```
 
 Notice how:
+
 - The `hooks.pre-commit` array was extended with both values
 - The `mcpServers` object now contains both servers
 
 ##### Example 3: TOML Merge
 
 **Base** (`pyproject.toml`):
+
 ```toml
 [project]
 name = "my-project"
@@ -130,6 +156,7 @@ testpaths = ["tests"]
 ```
 
 **Overlay** (`pyproject.toml`):
+
 ```toml
 [project]
 dependencies = ["pytest"]
@@ -139,6 +166,7 @@ line-length = 100
 ```
 
 **Merged result**:
+
 ```toml
 [project]
 name = "my-project"
@@ -151,65 +179,154 @@ testpaths = ["tests"]
 line-length = 100
 ```
 
-### Setup Scripts
+### Scripts
 
-Config shards can include a `setup.sh` script that runs automatically before the experiment starts.
+Config shards, task shards, and eval shards can include scripts that run at different phases of the experiment lifecycle. When multiple shards define the same script type, all scripts run in order based on shard type (config → task → eval).
 
-#### How Setup Scripts Work
+#### Script Types
 
-1. Place `setup.sh` in your config shard directory
-2. ccBench automatically detects and runs it after git initialization
-3. The script executes from within the project directory
-4. Any exit code other than 0 triggers a warning (but doesn't stop the experiment)
+| Script       | When it runs                                                     | Failure behavior         |
+| ------------ | ---------------------------------------------------------------- | ------------------------ |
+| `staging.sh` | Before shard is merged, operates on shard's own files in staging | Stops processing         |
+| `setup.sh`   | After all shards merged, before experiment runs                  | Stops experiment         |
+| `run.sh`     | Executes the main experiment task                                | Continues to next script |
 
-#### Example Setup Script
+#### How Script Execution Works
 
-**File**: `config_forge/tdd_guard_for_claude_code/setup.sh`
-```bash
-#!/bin/bash
-# Install TDD Guard tooling
+1. **Directory assembly is task-first**: the task is copied first, then config shards and eval shards are overlaid onto it
+2. **Script ordering is still config-first**: script indices are assigned in config → task → eval order
+3. **Scripts are renamed during copy**: `run.sh` → `run.{index:03d}.{shard_name}.sh` (zero-padded 3-digit index)
+4. **Scripts execute in alphabetical order** (which preserves the script index order)
+5. **Environment variables propagate** between all scripts - `staging.sh` → `setup.sh` → `run.sh`
+6. **Output is captured**: Each script's output is streamed to the terminal and saved to a `.log` file
 
-npm install -g tdd-guard
-python -m venv .venv
-source .venv/bin/activate
-pip install tdd-guard-pytest
-echo "Activate and use the \`.venv\` virtual environment for any Python development." > CLAUDE.md
+Example of script ordering with 2 config shards, 1 task, and 2 eval shards:
+
+```
+setup.000.claude_code.sh     # config[0]
+setup.001.portkey_for_claude_code.sh  # config[1]
+setup.002.aoc_2025_01.sh     # task
+setup.003.cloc.sh            # eval[0]
+setup.004.metrics.sh         # eval[1]
 ```
 
-#### Best Practices for Setup Scripts
+#### Environment Propagation
 
-- **Make them idempotent** - Safe to run multiple times
-- **Check for existing installations** - Don't reinstall if already present
-- **Use absolute paths or explicit cd commands** - Script runs from project dir
-- **Exit with proper codes** - 0 for success, non-zero for failure
-- **Document requirements** - Add comments explaining what tools are needed
-- **Handle errors gracefully** - Don't let minor issues break the experiment
+Environment variables flow forward through all script phases. Once a variable is exported, all subsequent scripts see it:
 
-#### Example: Idempotent Setup Script
+```bash
+# setup.000.claude_code.sh
+export VIRTUAL_ENV=/path/to/venv
+source $VIRTUAL_ENV/bin/activate
+```
+
+```bash
+# setup.001.portkey_for_claude_code.sh
+# VIRTUAL_ENV is available here automatically
+pip install requests
+export CLOC_EXTRA_ARGS="--exclude-dir=.venv"
+```
+
+```bash
+# run.003.cloc.sh  (eval shard)
+# Both VIRTUAL_ENV and CLOC_EXTRA_ARGS are available
+cd project
+git diff --name-only HEAD
+git ls-files --others --exclude-standard
+cloc $CLOC_EXTRA_ARGS --list-file=<changed-files>
+```
+
+#### staging.sh - Pre-merge Script
+
+Use `staging.sh` when your shard needs to modify its own files before merging. The script runs in isolation and sees the shard's original filenames (e.g., `run.sh`, not the renamed version).
+
+**Example**: Dynamically generating a run script:
 
 ```bash
 #!/bin/bash
-set -e  # Exit on error
+# staging.sh - runs before shard is merged
 
-# Only install if not already present
-if ! command -v tdd-guard &> /dev/null; then
-    echo "Installing tdd-guard..."
-    npm install -g tdd-guard
-else
-    echo "tdd-guard already installed"
-fi
+# Append additional commands to our run.sh
+cat >> run.sh << 'EOF'
+echo "Additional logging from my_shard"
+EOF
+```
 
-# Only create venv if it doesn't exist
-if [ ! -d ".venv" ]; then
-    echo "Creating virtual environment..."
-    python -m venv .venv
-fi
+#### setup.sh - Post-merge Setup
 
-# Activate and install Python dependencies
+Use `setup.sh` for initialization that needs the complete merged environment. This is where you install dependencies, create virtual environments, etc.
+
+**Example**:
+
+```bash
+#!/bin/bash
+set -e
+
+# Create virtual environment
+python -m venv .venv
 source .venv/bin/activate
-pip install --quiet tdd-guard-pytest
+pip install -r requirements.txt
 
-echo "Setup complete!"
+# Export for subsequent scripts
+export VIRTUAL_ENV="$(pwd)/.venv"
+```
+
+If any `setup.*.sh` script fails (non-zero exit), the experiment stops.
+
+#### run.sh - Main Execution
+
+Use `run.sh` for the actual experiment execution. Multiple `run.*.sh` scripts execute in order, and failures don't stop subsequent scripts.
+
+**Example**:
+
+```bash
+#!/bin/bash
+cd project
+claude --print --output-format stream-json --verbose "$(cat ../prompt.md)" | tee ../output.json
+```
+
+#### Best Practices
+
+- **Make scripts idempotent** - Safe to run multiple times
+- **Use `export` for cross-script communication** - Environment propagates automatically
+- **Check for existing state** - Don't reinstall if already present
+- **Exit with proper codes** - 0 for success, non-zero for failure
+- **Keep `staging.sh` simple** - Only modify your shard's own files
+
+#### Example: Complete Shard with Multiple Scripts
+
+```
+config_forge/my_shard/
+├── staging.sh          # Runs during staging (task root)
+├── setup.sh            # Installs dependencies (task root)
+├── run.sh              # Main execution (task root)
+└── project/            # Agent workspace files
+    └── .claude/
+        └── settings.json   # Merged with other shards
+```
+
+**staging.sh**:
+
+```bash
+#!/bin/bash
+# Add timestamping to our run script
+sed -i '1a echo "Started at $(date)"' run.sh
+```
+
+**setup.sh**:
+
+```bash
+#!/bin/bash
+set -e
+npm install -g my-tool
+export MY_TOOL_INSTALLED=true
+```
+
+**run.sh**:
+
+```bash
+#!/bin/bash
+my-tool analyze .
 ```
 
 ## Creating Experiments
@@ -225,8 +342,8 @@ tasks:
 variants:
   baseline:
     []
-  with_tdd_guard:
-    - tdd_guard_for_claude_code
+  with_portkey:
+    - portkey_for_claude_code
 
 configs:
   - claude_code
@@ -242,7 +359,7 @@ evals:
 - **variants** - Named configurations with additional config shards
   - Empty array `[]` means use only base configs
   - List of config shards to overlay on base configs
-- **configs** - Base config shards applied to all variants
+- **configs** - Base config shards overlaid onto the copied task for all variants
 - **evals** - Evaluation scripts to run after task completion
 
 ### Running Specific Variants
@@ -254,6 +371,7 @@ uv run ccBench.py my_experiment.yaml --variant baseline
 ```
 
 This is useful for:
+
 - Testing a single configuration
 - Iterating on specific variants
 - Reducing experiment time during development
@@ -263,13 +381,15 @@ This is useful for:
 ### Merge Conflicts
 
 If you see unexpected values in merged files, check:
-1. The order of config shards (later shards override earlier ones)
+
+1. The order of config shards (later config shards override earlier ones, and all config overlays land after the initial task copy)
 2. Whether values should be arrays (for concatenation) or primitives (for replacement)
 3. The merge logs - ccBench logs when it merges files
 
 ### Setup Script Failures
 
 If a setup script fails:
+
 1. Check the warning message for the exit code
 2. Run the script manually in the project directory to debug
 3. Verify all required tools are installed on your system
@@ -278,6 +398,7 @@ If a setup script fails:
 ### Variant Not Found
 
 If you get "Variant not found" error:
+
 1. Check the variant name spelling (case-sensitive)
 2. Verify the experiment YAML has a `variants:` section
 3. List available variants by running without `--variant` flag

@@ -1,3 +1,6 @@
+env:
+  ANTHROPIC_MODEL: sonnet
+
 tasks:
   - cost-splitting-platform
   - c4-stop-button
@@ -21,5 +24,4 @@ configs:
   - portkey_for_claude_code
 
 evals:
-  - cloc
   - claude_code_metrics
