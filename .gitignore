@@ -3,3 +3,5 @@ results/**/*
 !config_forge/**/*
 config_forge/**/.env
 !tasks/**/*
+__pycache__/
+*.pyc
