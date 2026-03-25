@@ -266,7 +266,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--provider", default=os.getenv("LLM_JUDGE_PROVIDER"))
     parser.add_argument("--model", default=os.getenv("LLM_JUDGE_MODEL"))
     parser.add_argument("--max-tokens", type=int, default=int(os.getenv("LLM_JUDGE_MAX_TOKENS", "1200")))
-    parser.add_argument("--dry-run", action="store_true", default=os.getenv("LLM_JUDGE_DRY_RUN") == "1")
+    parser.add_argument(
+        "--dry-run",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("LLM_JUDGE_DRY_RUN") == "1",
+    )
     args = parser.parse_args(argv)
 
     project_dir = Path(args.project)
@@ -282,6 +286,10 @@ def main(argv: list[str] | None = None) -> int:
     review_prompt = build_review_prompt(prompt_text, skills, change_context)
 
     prompt_dump.write_text(review_prompt, encoding="utf-8")
+
+    if args.dry_run:
+        print("Dry run enabled; review prompt written to", prompt_dump)
+        return 0
 
     provider = pick_provider(args.provider)
     # Normalize provider and validate against supported providers to avoid KeyError
@@ -302,10 +310,6 @@ def main(argv: list[str] | None = None) -> int:
         project_dir=project_dir,
         skills=skills,
     )
-
-    if args.dry_run:
-        print("Dry run enabled; review prompt written to", prompt_dump)
-        return 0
 
     if provider == "anthropic":
         review = call_anthropic(model, review_prompt, args.max_tokens)
