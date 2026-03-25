@@ -284,6 +284,13 @@ def main(argv: list[str] | None = None) -> int:
     prompt_dump.write_text(review_prompt, encoding="utf-8")
 
     provider = pick_provider(args.provider)
+    # Normalize provider and validate against supported providers to avoid KeyError
+    provider = provider.lower()
+    if provider not in DEFAULT_PROVIDER_MODELS:
+        allowed_providers = ", ".join(sorted(DEFAULT_PROVIDER_MODELS.keys()))
+        raise ValueError(
+            f"Unsupported provider {provider!r}. Allowed providers: {allowed_providers}"
+        )
     model = args.model or DEFAULT_PROVIDER_MODELS[provider]
 
     write_metadata(
