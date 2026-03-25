@@ -173,7 +173,7 @@ def build_review_prompt(
         f"{change_context}\n\n"
         "Review format (markdown):\n"
         "- Overview: Short description of the delivered solution and whether it meets the prompt.\n"
-        "- Skills Observed: Summarize how the listed skills appeared in the work; add any obvious missing skills.\n"
+        "- Skills Observed: Summarize how each listed skill appeared in the work.\n"
         "- Code Review: Bullet issues grouped by severity (High/Med/Low). Focus on correctness, completeness, and clarity. Mention files.\n"
         "- Testing Gaps: Note missing or insufficient tests relevant to the task.\n"
         "- Verdict: Pass/Fail with one-line justification."
