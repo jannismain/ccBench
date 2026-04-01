@@ -6,7 +6,7 @@ export CLAUDE_CONFIG_DIR="$SCRIPT_DIR/.claude-runtime"
 mkdir -p "$CLAUDE_CONFIG_DIR"
 export CLAUDE=${CLAUDE:-~/.local/bin/claude}
 
-CLAUDE_OPTS="--print --verbose --output-format stream-json --dangerously-skip-permissions --setting-sources project --model ${MODEL}"
+CLAUDE_OPTS="--print --verbose --output-format stream-json --dangerously-skip-permissions --setting-sources project"
 
 PROMPT="$(cat prompt.md)"
 
