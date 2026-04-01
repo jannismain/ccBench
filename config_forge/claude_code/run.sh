@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-export CLAUDE_CONFIG_DIR="$PROJECT_ROOT/.claude-runtime"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export CLAUDE_CONFIG_DIR="$SCRIPT_DIR/.claude-runtime"
 mkdir -p "$CLAUDE_CONFIG_DIR"
 export CLAUDE=${CLAUDE:-~/.local/bin/claude}
 
@@ -20,4 +20,4 @@ else
 fi
 
 cd project
-$CLAUDE $CLAUDE_OPTS "$PROMPT" | tee ../output.json
+$CLAUDE $CLAUDE_OPTS "$PROMPT" | tee -a ../output.json

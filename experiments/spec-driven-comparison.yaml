@@ -2,23 +2,24 @@ env:
   ANTHROPIC_MODEL: sonnet
 
 tasks:
-  - cost-splitting-platform
+  - fair-share
   - c4-stop-button
 
 variants:
   baseline:
     - claude_code
   openspec:
-    - claude_code
     - openspec:
         env:
           TOOLS: claude
   bmad_full:
-    - bmad_install
-    - bmad_full_claude_code
+    - bmad_claude_code
   bmad_quick:
-    - bmad_install
-    - bmad_quick_claude_code
+    - bmad_claude_code:
+      env:
+        QUICK_FLOW: 1
+  gsd:
+    - gsd_claude_code
 
 configs:
   - portkey_for_claude_code

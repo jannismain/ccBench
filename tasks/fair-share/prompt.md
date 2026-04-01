@@ -65,7 +65,6 @@ The solution must follow these constraints:
 - Include tests that cover critical business logic and edge cases.
 - Include end to end tests that validate the main user flows (e.g., creating a group, adding an expense, recording a settlement).
 
-
 ## Acceptance criteria
 A reviewer should be able to verify the following:
 

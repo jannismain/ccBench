@@ -282,7 +282,7 @@ Use `run.sh` for the actual experiment execution. Multiple `run.*.sh` scripts ex
 ```bash
 #!/bin/bash
 cd project
-claude --print --output-format stream-json --verbose "$(cat ../prompt.md)" | tee ../output.json
+claude --print --output-format stream-json --verbose "$(cat ../prompt.md)" | tee -a ../output.json
 ```
 
 #### Best Practices
