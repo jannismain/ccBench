@@ -39,17 +39,29 @@ uv run ccBench.py <experiment.yaml>
 
 ### Command-Line Options
 
-- `experiment` - Path to experiment YAML file (relative to `experiments/` directory)
-- `--variant NAME` - Run only the specified variant from the experiment (optional)
+- `experiment` - Experiment YAML file. You can pass a direct path, or just the file name relative to `experiments/`
+- `--variant NAME` - Run only the specified variant from the experiment
+- `--task NAME` - Run only the specified task from the experiment
+- `--skip-run` - Prepare experiment directories and run setup scripts, but skip task execution
+- `--results-dir PATH` - Write results under the given directory instead of using `$CCBENCH_RESULT` or `./results`
 
 ### Examples
 
 ```bash
 # Run all variants in an experiment
-uv run ccBench.py tdd_guard.yaml
+uv run ccBench.py spec-driven-comparison.yaml
 
 # Run baseline variant only
-uv run ccBench.py tdd_guard.yaml --variant with_tdd_guard
+uv run ccBench.py spec-driven-comparison.yaml --variant baseline
+
+# Run one task from the experiment
+uv run ccBench.py spec-driven-comparison.yaml --task c4-stop-button
+
+# Prepare directories and setup without executing run scripts
+uv run ccBench.py spec-driven-comparison.yaml --skip-run
+
+# Write results to a custom directory
+uv run ccBench.py spec-driven-comparison.yaml --results-dir /tmp/ccbench-results
 ```
 
 ## Available Evaluations
