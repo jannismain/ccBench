@@ -641,13 +641,15 @@ if __name__ == "__main__":
 
     # copy all task files into the project directory
     experiment_task_dirs = []
-    tasks = experiment_config["tasks"]
+    tasks = experiment_config.get("tasks", [])
     if args.task:
         if args.task not in tasks:
             print(f"Error: Task '{args.task}' not found in experiment.")
             print(f"Available tasks: {', '.join(tasks)}")
             exit(1)
         tasks = [args.task]
+    if not tasks:
+        tasks = ["default"]
     for task in tasks:
         # Determine what variants to process
         variants_to_process = []
