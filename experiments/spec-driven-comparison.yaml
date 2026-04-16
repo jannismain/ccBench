@@ -20,6 +20,8 @@ variants:
           QUICK_FLOW: 1
   gsd:
     - gsd_claude_code
+  speckit:
+    - speckit
 
 configs:
   - portkey_for_claude_code
