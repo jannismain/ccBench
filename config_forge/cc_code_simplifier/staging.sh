@@ -8,7 +8,7 @@ export CLAUDE=${CLAUDE:-~/.local/bin/claude}
 
 CLAUDE_OPTS="--dangerously-skip-permissions --setting-sources project"
 
-cd project
+mkdir project && cd project
 
 $CLAUDE $CLAUDE_OPTS plugin marketplace add anthropics/claude-plugins-official
 $CLAUDE $CLAUDE_OPTS plugin marketplace update claude-plugins-official
