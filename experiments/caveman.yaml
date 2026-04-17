@@ -1,5 +1,6 @@
 tasks:
   - cw_perfect_power
+  - fair-share
 
 variants:
   baseline: []
