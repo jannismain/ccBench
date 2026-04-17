@@ -4,34 +4,48 @@ import json
 import os
 import subprocess
 import tomllib
-from pathlib import Path
 
 import pytest
 import tomli_w
+import yaml
 
-from ccBench import (
-    CCBENCH_DIR,
-    CCBENCH_IGNORE,
-    STAGING_SCRIPT,
-    apply_shard_env,
-    build_parser,
+from ccbench.cli import build_app
+from ccbench.compare import (
+    extract_from_claude_metrics,
+    extract_from_cloc,
+    extract_from_judge_scores,
+    extract_from_static_analysis,
+    extract_from_test_pass_rate,
+    extract_metrics_summary,
+    render_comparison_json,
+    render_comparison_table,
+    resolve_task_dirs,
+)
+from ccbench.experiment import (
+    all_available_evals,
+    build_ad_hoc_experiment_config,
+    build_ad_hoc_experiment_name,
+    run_experiment,
+)
+from ccbench.files import (
     copy_item,
     copy_shard_with_script_rename,
     copy_task_shard_first,
     deep_merge_dict,
+)
+from ccbench.paths import (
+    CCBENCH_DIR,
+    CCBENCH_IGNORE,
+    STAGING_SCRIPT,
+)
+from ccbench.scripts import (
     ensure_project_git_repo,
-    extract_from_claude_metrics,
-    extract_from_cloc,
-    extract_from_test_pass_rate,
-    extract_from_static_analysis,
-    extract_from_judge_scores,
-    extract_metrics_summary,
+    run_scripts_with_env_propagation,
+)
+from ccbench.shards import (
+    apply_shard_env,
     parse_shard_entry,
     process_shard,
-    render_comparison_json,
-    render_comparison_table,
-    resolve_task_dirs,
-    run_scripts_with_env_propagation,
 )
 
 
@@ -1177,7 +1191,7 @@ class TestEnvPrecedence:
     def _run_experiment(self, tmp_path):
         """Run test_model_override with --skip-run, results written to tmp_path."""
         result = subprocess.run(
-            ["uv", "run", "python", "ccBench.py", "test_model_override", "--skip-run"],
+            ["uv", "run", "ccbench", "test_model_override", "--skip-run"],
             capture_output=True,
             text=True,
             env={**os.environ, "CCBENCH_RESULT": str(tmp_path)},
@@ -1195,7 +1209,9 @@ class TestEnvPrecedence:
 
         sonnet_env = (sonnet_dir / ".env").read_text()
         last_model_line = [
-            l for l in sonnet_env.splitlines() if l.startswith("ANTHROPIC_MODEL=")
+            line
+            for line in sonnet_env.splitlines()
+            if line.startswith("ANTHROPIC_MODEL=")
         ][-1]
         assert last_model_line == "ANTHROPIC_MODEL=sonnet", (
             f"Shard-level env should be last and win, got: {last_model_line}\n"
@@ -1211,52 +1227,174 @@ class TestEnvPrecedence:
         assert "ANTHROPIC_MODEL=haiku" in baseline_env
 
 
-class TestBuildParser:
-    """Tests for CLI argument parsing with subcommands."""
+class TestBuildApp:
+    """Tests for Cyclopts CLI argument parsing with subcommands."""
+
+    def parse_args(self, tokens):
+        command, bound, _ = build_app().parse_args(tokens)
+        bound.apply_defaults()
+        return command, bound.arguments
 
     def test_old_style_invocation_maps_to_run(self):
-        """Passing experiment name directly still works via sys.argv insertion."""
-        import sys
-
-        original = sys.argv[:]
-        try:
-            sys.argv = ["ccBench.py", "simple.yaml"]
-            known_commands = {"run", "compare"}
-            if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
-                sys.argv.insert(1, "run")
-            parser = build_parser()
-            args = parser.parse_args()
-            assert args.command == "run"
-            assert args.experiment == "simple.yaml"
-        finally:
-            sys.argv = original
+        """Passing experiment name directly still uses the default run command."""
+        command, args = self.parse_args(["simple.yaml"])
+        assert command.__name__ == "run"
+        assert args["experiment"] == "simple.yaml"
 
     def test_explicit_run_subcommand(self):
-        parser = build_parser()
-        args = parser.parse_args(["run", "simple.yaml"])
-        assert args.command == "run"
-        assert args.experiment == "simple.yaml"
+        command, args = self.parse_args(["run", "simple.yaml"])
+        assert command.__name__ == "run"
+        assert args["experiment"] == "simple.yaml"
+
+    def test_ad_hoc_run_subcommand(self):
+        command, args = self.parse_args(
+            [
+                "run",
+                "--shard",
+                "claude_code",
+                "--shard",
+                "cc_caveman",
+                "--task",
+                "aoc_2025_10",
+                "--eval",
+                "cloc",
+                "--eval",
+                "claude_code_metrics",
+            ]
+        )
+        assert command.__name__ == "run"
+        assert args["experiment"] is None
+        assert args["shard"] == ("claude_code", "cc_caveman")
+        assert args["eval"] == ("cloc", "claude_code_metrics")
+        assert args["task"] == "aoc_2025_10"
 
     def test_compare_parses_result_dirs(self):
-        parser = build_parser()
-        args = parser.parse_args(["compare", "dir1", "dir2"])
-        assert args.command == "compare"
-        assert args.result_dirs == ["dir1", "dir2"]
+        command, args = self.parse_args(["compare", "dir1", "dir2"])
+        assert command.__name__ == "compare"
+        assert args["result_dirs"] == ("dir1", "dir2")
 
     def test_compare_across_flag(self):
-        parser = build_parser()
-        args = parser.parse_args(["compare", "--across", "dir1", "dir2"])
-        assert args.across is True
+        _, args = self.parse_args(["compare", "--across", "dir1", "dir2"])
+        assert args["across"] is True
 
     def test_compare_json_flag(self):
-        parser = build_parser()
-        args = parser.parse_args(["compare", "--json", "dir1"])
-        assert args.json_output is True
+        _, args = self.parse_args(["compare", "--json", "dir1"])
+        assert args["json"] is True
 
     def test_compare_no_args_defaults_to_empty_list(self):
-        parser = build_parser()
-        args = parser.parse_args(["compare"])
-        assert args.result_dirs == []
+        _, args = self.parse_args(["compare"])
+        assert args["result_dirs"] == ()
+
+
+class TestAdHocExperiment:
+    """Tests for ad-hoc experiment construction."""
+
+    def test_all_available_evals_are_sorted(self, tmp_path, monkeypatch):
+        evals_dir = tmp_path / "evals"
+        for eval_name in ["static_analysis", "cloc", "claude_code_metrics"]:
+            (evals_dir / eval_name).mkdir(parents=True)
+        (evals_dir / "README.md").write_text("not an eval shard")
+        monkeypatch.setattr("ccbench.paths.EVALS", evals_dir)
+
+        assert all_available_evals() == [
+            "claude_code_metrics",
+            "cloc",
+            "static_analysis",
+        ]
+
+    def test_build_ad_hoc_experiment_config_defaults_to_all_evals(
+        self, tmp_path, monkeypatch
+    ):
+        evals_dir = tmp_path / "evals"
+        for eval_name in ["cloc", "claude_code_metrics"]:
+            (evals_dir / eval_name).mkdir(parents=True)
+        monkeypatch.setattr("ccbench.paths.EVALS", evals_dir)
+
+        config = build_ad_hoc_experiment_config(
+            ("claude_code", "cc_caveman"),
+            "aoc_2025_10",
+        )
+
+        assert config == {
+            "tasks": ["aoc_2025_10"],
+            "configs": ["claude_code", "cc_caveman"],
+            "evals": ["claude_code_metrics", "cloc"],
+        }
+        assert (
+            build_ad_hoc_experiment_name(config)
+            == "adhoc_aoc_2025_10_claude_code_cc_caveman"
+        )
+
+    def test_build_ad_hoc_experiment_config_custom_evals_override_default(
+        self, tmp_path, monkeypatch
+    ):
+        evals_dir = tmp_path / "evals"
+        for eval_name in ["cloc", "static_analysis"]:
+            (evals_dir / eval_name).mkdir(parents=True)
+        monkeypatch.setattr("ccbench.paths.EVALS", evals_dir)
+
+        config = build_ad_hoc_experiment_config(
+            ("claude_code",),
+            "aoc_2025_10",
+            ("cloc",),
+        )
+
+        assert config == {
+            "tasks": ["aoc_2025_10"],
+            "configs": ["claude_code"],
+            "evals": ["cloc"],
+        }
+
+    def test_ad_hoc_experiment_requires_task(self):
+        with pytest.raises(SystemExit):
+            build_ad_hoc_experiment_config(("claude_code",), None)
+
+    def test_ad_hoc_experiment_requires_shard(self):
+        with pytest.raises(SystemExit):
+            build_ad_hoc_experiment_config((), "aoc_2025_10")
+
+    def test_run_ad_hoc_experiment_writes_generated_yaml(self, tmp_path, monkeypatch):
+        tasks_dir = tmp_path / "tasks"
+        forge_dir = tmp_path / "config_forge"
+        results_dir = tmp_path / "results"
+        task_dir = tasks_dir / "demo"
+        task_dir.mkdir(parents=True)
+        (task_dir / "run.sh").write_text("#!/bin/bash\necho task\n")
+
+        for shard_name in ["alpha", "beta"]:
+            shard_dir = forge_dir / shard_name
+            shard_dir.mkdir(parents=True)
+            (shard_dir / f"{shard_name}.txt").write_text(shard_name)
+        evals_dir = tmp_path / "evals"
+        for eval_name in ["gamma", "delta"]:
+            eval_dir = evals_dir / eval_name
+            eval_dir.mkdir(parents=True)
+            (eval_dir / f"{eval_name}.txt").write_text(eval_name)
+
+        monkeypatch.setattr("ccbench.paths.TASKS", tasks_dir)
+        monkeypatch.setattr("ccbench.paths.FORGE", forge_dir)
+        monkeypatch.setattr("ccbench.paths.EVALS", evals_dir)
+        monkeypatch.setattr("ccbench.paths.RESULTS", results_dir)
+
+        experiment_root = run_experiment(
+            shards=("alpha", "beta"),
+            task="demo",
+            skip_run=True,
+        )
+
+        generated_yaml = experiment_root / "adhoc_demo_alpha_beta.yaml"
+        assert generated_yaml.exists()
+        assert yaml.safe_load(generated_yaml.read_text()) == {
+            "tasks": ["demo"],
+            "configs": ["alpha", "beta"],
+            "evals": ["delta", "gamma"],
+        }
+        task_root = experiment_root / "tasks" / "demo"
+        assert (task_root / "run.002.demo.sh").exists()
+        assert (task_root / "alpha.txt").exists()
+        assert (task_root / "beta.txt").exists()
+        assert (task_root / "delta.txt").exists()
+        assert (task_root / "gamma.txt").exists()
 
 
 class TestParsePytest:
@@ -1544,7 +1682,7 @@ class TestCompareCommand:
     def test_compare_single_run(self, tmp_path):
         result_dir = self._make_result_dir(tmp_path)
         result = subprocess.run(
-            ["uv", "run", "python", "ccBench.py", "compare", str(result_dir)],
+            ["uv", "run", "ccbench", "compare", str(result_dir)],
             capture_output=True, text=True, cwd=CCBENCH_DIR,
         )
         assert result.returncode == 0
@@ -1555,7 +1693,7 @@ class TestCompareCommand:
     def test_compare_json_output(self, tmp_path):
         result_dir = self._make_result_dir(tmp_path)
         result = subprocess.run(
-            ["uv", "run", "python", "ccBench.py", "compare", "--json", str(result_dir)],
+            ["uv", "run", "ccbench", "compare", "--json", str(result_dir)],
             capture_output=True, text=True, cwd=CCBENCH_DIR,
         )
         assert result.returncode == 0
@@ -1566,7 +1704,7 @@ class TestCompareCommand:
 
     def test_compare_nonexistent_dir(self, tmp_path):
         result = subprocess.run(
-            ["uv", "run", "python", "ccBench.py", "compare", str(tmp_path / "nope")],
+            ["uv", "run", "ccbench", "compare", str(tmp_path / "nope")],
             capture_output=True, text=True, cwd=CCBENCH_DIR,
         )
         assert result.returncode != 0
@@ -1580,14 +1718,14 @@ class TestCompareCommand:
             run_dir = results_dir / name
             run_dir.mkdir()
             self._make_result_dir(run_dir)
-        monkeypatch.setattr("ccBench.RESULTS", results_dir)
-        from ccBench import cmd_compare, build_parser
-        args = build_parser().parse_args(["compare", "--json"])
+        monkeypatch.setattr("ccbench.paths.RESULTS", results_dir)
         import io
         from contextlib import redirect_stdout
+
+        from ccbench.compare import cmd_compare
         buf = io.StringIO()
         with redirect_stdout(buf):
-            cmd_compare(args)
+            cmd_compare(json_output=True)
         data = json.loads(buf.getvalue())
         # Should have resolved the most recent dir's task variants
         assert "variants" in data

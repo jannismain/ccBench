@@ -1,0 +1,2 @@
+"""ccBench package."""
+

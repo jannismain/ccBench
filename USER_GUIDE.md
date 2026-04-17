@@ -367,7 +367,7 @@ evals:
 Use the `--variant` flag to run only one variant:
 
 ```bash
-uv run ccBench.py my_experiment.yaml --variant baseline
+uv run ccbench my_experiment.yaml --variant baseline
 ```
 
 This is useful for:
