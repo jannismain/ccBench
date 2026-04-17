@@ -9,4 +9,4 @@ if [ ! -f "$OUTPUT_FILE" ]; then
     exit 1
 fi
 
-python3 cc_metrics.py $OUTPUT_FILE $METRICS_FILE
+python3 cc_metrics.py $OUTPUT_FILE $METRICS_FILE .claude-runtime/.claude.json

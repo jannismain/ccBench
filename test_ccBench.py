@@ -14,13 +14,23 @@ from ccBench import (
     CCBENCH_IGNORE,
     STAGING_SCRIPT,
     apply_shard_env,
+    build_parser,
     copy_item,
     copy_shard_with_script_rename,
     copy_task_shard_first,
     deep_merge_dict,
     ensure_project_git_repo,
+    extract_from_claude_metrics,
+    extract_from_cloc,
+    extract_from_test_pass_rate,
+    extract_from_static_analysis,
+    extract_from_judge_scores,
+    extract_metrics_summary,
     parse_shard_entry,
     process_shard,
+    render_comparison_json,
+    render_comparison_table,
+    resolve_task_dirs,
     run_scripts_with_env_propagation,
 )
 
@@ -1199,3 +1209,386 @@ class TestEnvPrecedence:
 
         baseline_env = (baseline_dir / ".env").read_text()
         assert "ANTHROPIC_MODEL=haiku" in baseline_env
+
+
+class TestBuildParser:
+    """Tests for CLI argument parsing with subcommands."""
+
+    def test_old_style_invocation_maps_to_run(self):
+        """Passing experiment name directly still works via sys.argv insertion."""
+        import sys
+
+        original = sys.argv[:]
+        try:
+            sys.argv = ["ccBench.py", "simple.yaml"]
+            known_commands = {"run", "compare"}
+            if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
+                sys.argv.insert(1, "run")
+            parser = build_parser()
+            args = parser.parse_args()
+            assert args.command == "run"
+            assert args.experiment == "simple.yaml"
+        finally:
+            sys.argv = original
+
+    def test_explicit_run_subcommand(self):
+        parser = build_parser()
+        args = parser.parse_args(["run", "simple.yaml"])
+        assert args.command == "run"
+        assert args.experiment == "simple.yaml"
+
+    def test_compare_parses_result_dirs(self):
+        parser = build_parser()
+        args = parser.parse_args(["compare", "dir1", "dir2"])
+        assert args.command == "compare"
+        assert args.result_dirs == ["dir1", "dir2"]
+
+    def test_compare_across_flag(self):
+        parser = build_parser()
+        args = parser.parse_args(["compare", "--across", "dir1", "dir2"])
+        assert args.across is True
+
+    def test_compare_json_flag(self):
+        parser = build_parser()
+        args = parser.parse_args(["compare", "--json", "dir1"])
+        assert args.json_output is True
+
+    def test_compare_no_args_defaults_to_empty_list(self):
+        parser = build_parser()
+        args = parser.parse_args(["compare"])
+        assert args.result_dirs == []
+
+
+class TestParsePytest:
+    """Tests for pytest log parsing (used by test_pass_rate eval)."""
+
+    def test_strip_ansi(self):
+        from evals.test_pass_rate.parse_pytest import strip_ansi
+
+        text = "\x1b[32m4 passed\x1b[0m in 0.14s"
+        assert strip_ansi(text) == "4 passed in 0.14s"
+
+    def test_parse_all_passed(self):
+        from evals.test_pass_rate.parse_pytest import parse_pytest_summary
+
+        log = "======== 4 passed in 0.14s ========"
+        result = parse_pytest_summary(log)
+        assert result is not None
+        assert result["tests_passed"] == 4
+        assert result["tests_failed"] == 0
+        assert result["tests_run"] == 4
+        assert result["pass_rate"] == 1.0
+        assert result["duration_s"] == pytest.approx(0.14)
+
+    def test_parse_mixed_results(self):
+        from evals.test_pass_rate.parse_pytest import parse_pytest_summary
+
+        log = "======== 2 passed, 1 failed in 0.5s ========"
+        result = parse_pytest_summary(log)
+        assert result is not None
+        assert result["tests_passed"] == 2
+        assert result["tests_failed"] == 1
+        assert result["tests_run"] == 3
+        assert result["duration_s"] == pytest.approx(0.5)
+
+    def test_parse_with_errors_and_skipped(self):
+        from evals.test_pass_rate.parse_pytest import parse_pytest_summary
+
+        log = "======== 3 passed, 1 failed, 2 errors, 1 skipped in 1.2s ========"
+        result = parse_pytest_summary(log)
+        assert result is not None
+        assert result["tests_passed"] == 3
+        assert result["tests_failed"] == 3  # 1 failed + 2 errors
+        assert result["tests_skipped"] == 1
+        assert result["tests_run"] == 7
+
+    def test_parse_duration_with_minutes(self):
+        from evals.test_pass_rate.parse_pytest import parse_pytest_summary
+
+        log = "======== 10 passed in 1m 3.45s ========"
+        result = parse_pytest_summary(log)
+        assert result is not None
+        assert result["duration_s"] == pytest.approx(63.45)
+
+    def test_parse_no_pytest_output(self):
+        from evals.test_pass_rate.parse_pytest import parse_pytest_summary
+
+        log = "just some random log output\nnothing to see here"
+        assert parse_pytest_summary(log) is None
+
+    def test_parse_with_ansi_codes(self):
+        from evals.test_pass_rate.parse_pytest import parse_pytest_summary
+
+        # Real pytest output has ANSI codes around the summary
+        log = "\x1b[32m========== \x1b[32m\x1b[1m4 passed\x1b[0m\x1b[32m in 0.14s\x1b[0m\x1b[32m ===========\x1b[0m"
+        result = parse_pytest_summary(log)
+        assert result is not None
+        assert result["tests_passed"] == 4
+
+    def test_extract_failures(self):
+        from evals.test_pass_rate.parse_pytest import extract_failures
+
+        log = "FAILED test_solution.py::test_big_numbers - AssertionError\nFAILED test_solution.py::test_edge"
+        failures = extract_failures(log)
+        assert len(failures) == 2
+        assert "test_solution.py::test_big_numbers" in failures
+
+
+class TestMetricExtraction:
+    """Tests for eval JSON extractors."""
+
+    def test_extract_from_claude_metrics(self):
+        data = {
+            "overall": {
+                "total_cost_usd": 0.057747,
+                "duration_ms": 13360,
+                "num_turns": 4,
+                "is_error": False,
+                "usage": {
+                    "input_tokens": 6,
+                    "output_tokens": 555,
+                    "cache_read_input_tokens": 114530,
+                },
+            }
+        }
+        result = extract_from_claude_metrics(data)
+        assert result["cost_usd"] == 0.057747
+        assert result["duration_s"] == 13.36
+        assert result["turns"] == 4
+        assert result["output_tokens"] == 555
+        assert result["is_error"] is False
+
+    def test_extract_from_cloc(self):
+        data = {"SUM": {"code": 9, "nFiles": 1, "blank": 0, "comment": 0}}
+        result = extract_from_cloc(data)
+        assert result["loc_total"] == 9
+        assert result["loc_files"] == 1
+
+    def test_extract_from_test_pass_rate_completed(self):
+        data = {"status": "completed", "pass_rate": 1.0, "tests_passed": 4, "tests_failed": 0, "duration_s": 0.14}
+        result = extract_from_test_pass_rate(data)
+        assert result["test_pass_rate"] == 1.0
+        assert result["tests_passed"] == 4
+        assert result["test_duration_s"] == pytest.approx(0.14)
+
+    def test_extract_from_test_pass_rate_skipped(self):
+        data = {"status": "skipped", "reason": "no test files found"}
+        result = extract_from_test_pass_rate(data)
+        assert result["test_pass_rate"] is None
+        assert result["tests_passed"] is None
+        assert result["test_duration_s"] is None
+
+    def test_extract_from_static_analysis(self):
+        data = {"status": "completed", "lint_errors": 2, "lint_warnings": 1}
+        result = extract_from_static_analysis(data)
+        assert result["lint_errors"] == 2
+        assert result["lint_warnings"] == 1
+
+    def test_extract_from_static_analysis_skipped(self):
+        data = {"status": "skipped", "reason": "no changed Python files"}
+        result = extract_from_static_analysis(data)
+        assert result["lint_errors"] is None
+
+    def test_extract_from_judge_scores(self):
+        data = {
+            "readability": 4,
+            "idiomatic_style": 3,
+            "error_handling": 5,
+            "efficiency": 4,
+            "overall_notes": "Good code.",
+        }
+        result = extract_from_judge_scores(data)
+        assert result["judge_readability"] == 4
+        assert result["judge_idiomatic"] == 3
+        assert result["judge_error_handling"] == 5
+        assert result["judge_efficiency"] == 4
+
+    def test_extract_metrics_summary_missing_files(self, tmp_path):
+        result = extract_metrics_summary(tmp_path)
+        assert result == {}
+
+    def test_extract_metrics_summary_with_files(self, tmp_path):
+        (tmp_path / "claude_code_metrics.json").write_text(json.dumps({
+            "overall": {
+                "total_cost_usd": 0.05,
+                "duration_ms": 10000,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {"input_tokens": 5, "output_tokens": 100, "cache_read_input_tokens": 0},
+            }
+        }))
+        (tmp_path / "cloc.json").write_text(json.dumps({
+            "SUM": {"code": 15, "nFiles": 2, "blank": 1, "comment": 0}
+        }))
+        result = extract_metrics_summary(tmp_path)
+        assert result["cost_usd"] == 0.05
+        assert result["loc_total"] == 15
+
+
+class TestCompareTable:
+    """Tests for table/JSON rendering."""
+
+    def test_render_two_columns(self):
+        columns = ["baseline", "variant-a"]
+        metrics = [
+            {"cost_usd": 0.05, "turns": 4},
+            {"cost_usd": 0.30, "turns": 13},
+        ]
+        table = render_comparison_table(columns, metrics)
+        assert "baseline" in table
+        assert "variant-a" in table
+        assert "$0.0500" in table
+        assert "$0.3000" in table
+        assert "4" in table
+        assert "13" in table
+
+    def test_missing_values_show_dash(self):
+        columns = ["a", "b"]
+        metrics = [
+            {"cost_usd": 0.05, "test_pass_rate": None},
+            {"cost_usd": 0.10, "test_pass_rate": 1.0},
+        ]
+        table = render_comparison_table(columns, metrics)
+        assert "\u2014" in table  # em dash for missing value
+        assert "100%" in table
+
+    def test_rows_with_all_none_hidden(self):
+        columns = ["a", "b"]
+        metrics = [
+            {"cost_usd": 0.05, "judge_readability": None},
+            {"cost_usd": 0.10, "judge_readability": None},
+        ]
+        table = render_comparison_table(columns, metrics)
+        assert "Readability" not in table
+
+    def test_no_metrics_message(self):
+        table = render_comparison_table(["a"], [{}])
+        assert "No metrics found" in table
+
+    def test_json_output_structure(self):
+        columns = ["baseline", "variant"]
+        metrics = [
+            {"cost_usd": 0.05, "turns": 4},
+            {"cost_usd": 0.30, "turns": 13},
+        ]
+        raw = render_comparison_json(columns, metrics)
+        data = json.loads(raw)
+        assert data["variants"] == ["baseline", "variant"]
+        assert data["metrics"]["cost_usd"] == [0.05, 0.30]
+        assert data["metrics"]["turns"] == [4, 13]
+
+
+class TestResolveTaskDirs:
+    """Tests for directory resolution in compare command."""
+
+    def test_experiment_dir_expands_children(self, tmp_path):
+        tasks_dir = tmp_path / "tasks"
+        tasks_dir.mkdir()
+        (tasks_dir / "task_baseline").mkdir()
+        (tasks_dir / "task_variant").mkdir()
+
+        entries = resolve_task_dirs([str(tmp_path)], across=False)
+        labels = [label for label, _ in entries]
+        assert "task_baseline" in labels
+        assert "task_variant" in labels
+        assert len(entries) == 2
+
+    def test_task_variant_dir_directly(self, tmp_path):
+        (tmp_path / "project").mkdir()
+        (tmp_path / "output.json").write_text("{}")
+
+        entries = resolve_task_dirs([str(tmp_path)], across=False)
+        assert len(entries) == 1
+        assert entries[0][1] == tmp_path
+
+    def test_nonexistent_dir_skipped(self, tmp_path):
+        entries = resolve_task_dirs([str(tmp_path / "nonexistent")], across=False)
+        assert len(entries) == 0
+
+    def test_across_labels_include_parent(self, tmp_path):
+        run1 = tmp_path / "run1"
+        tasks1 = run1 / "tasks"
+        tasks1.mkdir(parents=True)
+        (tasks1 / "task_a").mkdir()
+
+        entries = resolve_task_dirs([str(run1)], across=True)
+        assert entries[0][0] == "run1/task_a"
+
+
+class TestCompareCommand:
+    """Integration tests for the full compare flow."""
+
+    def _make_result_dir(self, tmp_path):
+        """Create a mock result directory with two variants."""
+        tasks = tmp_path / "tasks"
+        tasks.mkdir()
+
+        for name, cost, loc in [("task_baseline", 0.05, 9), ("task_variant", 0.30, 7)]:
+            d = tasks / name
+            d.mkdir()
+            (d / "claude_code_metrics.json").write_text(json.dumps({
+                "overall": {
+                    "total_cost_usd": cost,
+                    "duration_ms": 10000,
+                    "num_turns": 4,
+                    "is_error": False,
+                    "usage": {"input_tokens": 5, "output_tokens": 100, "cache_read_input_tokens": 0},
+                }
+            }))
+            (d / "cloc.json").write_text(json.dumps({
+                "SUM": {"code": loc, "nFiles": 1, "blank": 0, "comment": 0}
+            }))
+
+        return tmp_path
+
+    def test_compare_single_run(self, tmp_path):
+        result_dir = self._make_result_dir(tmp_path)
+        result = subprocess.run(
+            ["uv", "run", "python", "ccBench.py", "compare", str(result_dir)],
+            capture_output=True, text=True, cwd=CCBENCH_DIR,
+        )
+        assert result.returncode == 0
+        assert "task_baseline" in result.stdout
+        assert "task_variant" in result.stdout
+        assert "$0.0500" in result.stdout
+
+    def test_compare_json_output(self, tmp_path):
+        result_dir = self._make_result_dir(tmp_path)
+        result = subprocess.run(
+            ["uv", "run", "python", "ccBench.py", "compare", "--json", str(result_dir)],
+            capture_output=True, text=True, cwd=CCBENCH_DIR,
+        )
+        assert result.returncode == 0
+        data = json.loads(result.stdout)
+        assert "variants" in data
+        assert "metrics" in data
+        assert "cost_usd" in data["metrics"]
+
+    def test_compare_nonexistent_dir(self, tmp_path):
+        result = subprocess.run(
+            ["uv", "run", "python", "ccBench.py", "compare", str(tmp_path / "nope")],
+            capture_output=True, text=True, cwd=CCBENCH_DIR,
+        )
+        assert result.returncode != 0
+
+    def test_compare_defaults_to_most_recent(self, tmp_path, monkeypatch):
+        """With no args, compare picks the lexicographically last result dir."""
+        results_dir = tmp_path / "results"
+        results_dir.mkdir()
+        # Create two timestamped result dirs; the second is "newer"
+        for name in ["20250101_000000_old", "20250202_000000_new"]:
+            run_dir = results_dir / name
+            run_dir.mkdir()
+            self._make_result_dir(run_dir)
+        monkeypatch.setattr("ccBench.RESULTS", results_dir)
+        from ccBench import cmd_compare, build_parser
+        args = build_parser().parse_args(["compare", "--json"])
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            cmd_compare(args)
+        data = json.loads(buf.getvalue())
+        # Should have resolved the most recent dir's task variants
+        assert "variants" in data
+        assert len(data["variants"]) == 2

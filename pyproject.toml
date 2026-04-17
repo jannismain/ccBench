@@ -16,7 +16,11 @@ dependencies = [
 line-length = 94
 
 [dependency-groups]
-dev = ["pytest>=9.0.2", "ruff>=0.14.8", "ty>=0.0.1a32"]
+dev = [
+    "pytest>=9.0.2",
+    "ruff>=0.14.8",
+    "ty>=0.0.1a32",
+]
 
 [tool.ruff.lint]
 extend-ignore = ["E501"]

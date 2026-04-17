@@ -582,37 +582,199 @@ RESULTS = Path(__file__).with_name("results")
 EVALS = Path(__file__).with_name("evals")
 
 
-if __name__ == "__main__":
-    from dotenv import load_dotenv
+# ---------------------------------------------------------------------------
+# compare subcommand: metric extraction and table rendering
+# ---------------------------------------------------------------------------
 
-    load_dotenv(".env")
+METRIC_DISPLAY = [
+    ("cost_usd", "Cost (USD)", lambda v: f"${v:.4f}"),
+    ("duration_s", "Duration (s)", lambda v: f"{v:.1f}"),
+    ("turns", "Turns", lambda v: str(int(v))),
+    ("output_tokens", "Output tokens", lambda v: f"{int(v):,}"),
+    ("loc_total", "Lines of code", lambda v: str(int(v))),
+    ("test_pass_rate", "Test pass rate", lambda v: f"{v:.0%}"),
+    ("tests_passed", "Tests passed", lambda v: str(int(v))),
+    ("tests_failed", "Tests failed", lambda v: str(int(v))),
+    ("test_duration_s", "Test duration (s)", lambda v: f"{v:.2f}"),
+    ("lint_errors", "Lint errors", lambda v: str(int(v))),
+    ("lint_warnings", "Lint warnings", lambda v: str(int(v))),
+    ("judge_readability", "Readability", lambda v: f"{int(v)}/5"),
+    ("judge_idiomatic", "Idiomatic style", lambda v: f"{int(v)}/5"),
+    ("judge_error_handling", "Error handling", lambda v: f"{int(v)}/5"),
+    ("judge_efficiency", "Efficiency", lambda v: f"{int(v)}/5"),
+]
 
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description="Run ccBench experiments")
-    parser.add_argument("experiment", help="Experiment YAML file (relative to experiments/)")
-    parser.add_argument(
-        "--variant",
-        help="Run only the specified variant (if experiment has variants)",
-        default=None,
-    )
-    parser.add_argument(
-        "--task",
-        help="Run only the specified task from the experiment",
-        default=None,
-    )
-    parser.add_argument(
-        "--skip-run",
-        help="Prepare experiment directories but skip execution",
-        default=False,
-        action="store_true",
-    )
-    parser.add_argument(
-        "--results-dir",
-        help="Directory for experiment results (default: $CCBENCH_RESULT or ./results)",
-        default=None,
-    )
-    args = parser.parse_args()
 
+def extract_from_claude_metrics(data: dict) -> dict:
+    overall = data.get("overall", {})
+    usage = overall.get("usage", {})
+    return {
+        "cost_usd": overall.get("total_cost_usd"),
+        "duration_s": (overall.get("duration_ms") or 0) / 1000,
+        "turns": overall.get("num_turns"),
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("output_tokens"),
+        "cache_read_tokens": usage.get("cache_read_input_tokens"),
+        "is_error": overall.get("is_error"),
+    }
+
+
+def extract_from_cloc(data: dict) -> dict:
+    summary = data.get("SUM", {})
+    return {
+        "loc_total": summary.get("code"),
+        "loc_files": summary.get("nFiles"),
+    }
+
+
+def extract_from_test_pass_rate(data: dict) -> dict:
+    if data.get("status") == "skipped":
+        return {"test_pass_rate": None, "tests_passed": None, "tests_failed": None, "test_duration_s": None}
+    return {
+        "test_pass_rate": data.get("pass_rate"),
+        "tests_passed": data.get("tests_passed"),
+        "tests_failed": data.get("tests_failed"),
+        "test_duration_s": data.get("duration_s"),
+    }
+
+
+def extract_from_static_analysis(data: dict) -> dict:
+    if data.get("status") == "skipped":
+        return {"lint_errors": None, "lint_warnings": None}
+    return {
+        "lint_errors": data.get("lint_errors"),
+        "lint_warnings": data.get("lint_warnings"),
+    }
+
+
+def extract_from_judge_scores(data: dict) -> dict:
+    return {
+        "judge_readability": data.get("readability"),
+        "judge_idiomatic": data.get("idiomatic_style"),
+        "judge_error_handling": data.get("error_handling"),
+        "judge_efficiency": data.get("efficiency"),
+    }
+
+
+KNOWN_EVAL_FILES: dict[str, callable] = {
+    "claude_code_metrics.json": extract_from_claude_metrics,
+    "cloc.json": extract_from_cloc,
+    "test_pass_rate.json": extract_from_test_pass_rate,
+    "static_analysis.json": extract_from_static_analysis,
+    "judge_scores.json": extract_from_judge_scores,
+}
+
+
+def extract_metrics_summary(task_dir: Path) -> dict:
+    metrics = {}
+    for filename, extractor in KNOWN_EVAL_FILES.items():
+        filepath = task_dir / filename
+        if filepath.exists():
+            try:
+                data = json.loads(filepath.read_text())
+                metrics.update(extractor(data))
+            except (json.JSONDecodeError, KeyError) as e:
+                log.warning(f"Failed to parse {filepath}: {e}")
+    return metrics
+
+
+def resolve_task_dirs(result_dirs: list[str], across: bool) -> list[tuple[str, Path]]:
+    """Resolve input paths to (label, task_dir) tuples."""
+    entries = []
+    for raw in result_dirs:
+        d = Path(raw)
+        if not d.is_dir():
+            log.warning(f"Not a directory: {d}")
+            continue
+        tasks_subdir = d / "tasks"
+        if tasks_subdir.is_dir():
+            # Experiment result dir — expand children
+            for child in sorted(tasks_subdir.iterdir()):
+                if child.is_dir():
+                    label = child.name
+                    if across:
+                        label = f"{d.name}/{child.name}"
+                    entries.append((label, child))
+        elif (d / "project").is_dir() or (d / "output.json").exists():
+            # Task-variant directory directly
+            label = d.name
+            if across:
+                label = f"{d.parent.parent.name}/{d.name}" if d.parent.name == "tasks" else d.name
+            entries.append((label, d))
+        else:
+            log.warning(f"Cannot identify directory type: {d}")
+    return entries
+
+
+def render_comparison_table(columns: list[str], metrics: list[dict]) -> str:
+    # Filter to rows where at least one column has a value
+    rows = []
+    for key, label, fmt in METRIC_DISPLAY:
+        values = [m.get(key) for m in metrics]
+        if any(v is not None for v in values):
+            formatted = [fmt(v) if v is not None else "\u2014" for v in values]
+            rows.append((label, formatted))
+
+    if not rows:
+        return "No metrics found."
+
+    label_width = max(len(label) for label, _ in rows)
+    col_widths = []
+    for i, col in enumerate(columns):
+        w = max(len(col), *(len(row[1][i]) for row in rows))
+        col_widths.append(w)
+
+    # Header
+    header = " " * (label_width + 2)
+    header += "  ".join(col.ljust(w) for col, w in zip(columns, col_widths))
+    lines = [header]
+
+    # Data rows
+    for label, formatted in rows:
+        line = label.ljust(label_width) + "  "
+        line += "  ".join(v.ljust(w) for v, w in zip(formatted, col_widths))
+        lines.append(line)
+
+    return "\n".join(lines)
+
+
+def render_comparison_json(columns: list[str], metrics: list[dict]) -> str:
+    result = {"variants": columns, "metrics": {}}
+    for key, label, _ in METRIC_DISPLAY:
+        values = [m.get(key) for m in metrics]
+        if any(v is not None for v in values):
+            result["metrics"][key] = values
+    return json.dumps(result, indent=2)
+
+
+def cmd_compare(args) -> None:
+    result_dirs = args.result_dirs
+    if not result_dirs:
+        candidates = sorted(RESULTS.iterdir()) if RESULTS.is_dir() else []
+        candidates = [d for d in candidates if d.is_dir()]
+        if not candidates:
+            sys.exit("No result directories found and RESULTS directory is empty.")
+        result_dirs = [str(candidates[-1])]
+        log.info(f"Defaulting to most recent result: {candidates[-1].name}")
+    task_entries = resolve_task_dirs(result_dirs, args.across)
+    if not task_entries:
+        sys.exit("No task directories found.")
+
+    columns = [label for label, _ in task_entries]
+    metrics = [extract_metrics_summary(path) for _, path in task_entries]
+
+    if args.json_output:
+        print(render_comparison_json(columns, metrics))
+    else:
+        print(render_comparison_table(columns, metrics))
+
+
+# ---------------------------------------------------------------------------
+# run subcommand
+# ---------------------------------------------------------------------------
+
+
+def cmd_run(args) -> None:
     results_dir = Path(args.results_dir or os.getenv("CCBENCH_RESULT") or RESULTS)
 
     # Create experiment directory
@@ -801,3 +963,86 @@ if __name__ == "__main__":
             success, env = run_scripts_with_env_propagation(
                 "run.*.sh", experiment_task_root, env, stop_on_failure=False
             )
+
+    if not args.skip_run:
+        print()
+        compare_args = argparse.Namespace(
+            result_dirs=[str(experiment_root)],
+            across=False,
+            json_output=False,
+        )
+        cmd_compare(compare_args)
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run and analyze ccBench experiments")
+    subparsers = parser.add_subparsers(dest="command")
+
+    # --- run subcommand ---
+    run_parser = subparsers.add_parser("run", help="Run an experiment")
+    run_parser.add_argument("experiment", help="Experiment YAML file (relative to experiments/)")
+    run_parser.add_argument(
+        "--variant",
+        help="Run only the specified variant (if experiment has variants)",
+        default=None,
+    )
+    run_parser.add_argument(
+        "--task",
+        help="Run only the specified task from the experiment",
+        default=None,
+    )
+    run_parser.add_argument(
+        "--skip-run",
+        help="Prepare experiment directories but skip execution",
+        default=False,
+        action="store_true",
+    )
+    run_parser.add_argument(
+        "--results-dir",
+        help="Directory for experiment results (default: $CCBENCH_RESULT or ./results)",
+        default=None,
+    )
+
+    # --- compare subcommand ---
+    compare_parser = subparsers.add_parser("compare", help="Compare experiment results")
+    compare_parser.add_argument(
+        "result_dirs",
+        nargs="*",
+        help="Result directory (experiment root or task variant directories); defaults to most recent",
+    )
+    compare_parser.add_argument(
+        "--across",
+        action="store_true",
+        help="Compare same task across multiple runs",
+    )
+    compare_parser.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="Output comparison as JSON",
+    )
+
+    return parser
+
+
+if __name__ == "__main__":
+    load_dotenv(".env")
+
+    parser = build_parser()
+
+    # Backward compatibility: if first arg is not a known subcommand, assume "run"
+    known_commands = {"run", "compare"}
+    if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
+        sys.argv.insert(1, "run")
+
+    args = parser.parse_args()
+
+    if args.command == "compare":
+        cmd_compare(args)
+    else:
+        cmd_run(args)

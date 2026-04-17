@@ -140,11 +140,32 @@ def extract_metrics(content: list[dict | list]) -> dict:
     return dict(overall=overall, steps=metrics)
 
 
-def main(cc_jsonl_output: str, target: str):
+def extract_skill_usage(claude_json_path: str) -> dict:
+    """Extract per-skill usage counts from .claude-runtime/.claude.json."""
+    try:
+        with open(claude_json_path, "r") as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logging.warning(f"Could not read {claude_json_path}: {e}")
+        return {}
+    skill_usage = data.get("skillUsage", {})
+    if not isinstance(skill_usage, dict):
+        return {}
+    return {
+        skill: info.get("usageCount", 0)
+        for skill, info in skill_usage.items()
+        if isinstance(info, dict)
+    }
+
+
+def main(cc_jsonl_output: str, target: str, claude_json_path: str | None = None):
     with open(cc_jsonl_output, "r") as f:
         content = [json.loads(line) for line in f.readlines() if line.strip()]
 
     metrics = extract_metrics(content)
+
+    if claude_json_path:
+        metrics["overall"]["skill_usage"] = extract_skill_usage(claude_json_path)
 
     # Write metrics to file
     with open(target, "w") as f:
@@ -173,11 +194,12 @@ def main(cc_jsonl_output: str, target: str):
 if __name__ == "__main__":
     import sys
 
-    cc_jsonl_output = sys.argv[1] if len(sys.argv) > 1 else "../output.json"
-    target = sys.argv[2] if len(sys.argv) > 2 else "../claude_code_metrics.json"
+    cc_jsonl_output = sys.argv[1] if len(sys.argv) > 1 else "output.json"
+    target = sys.argv[2] if len(sys.argv) > 2 else "claude_code_metrics.json"
+    claude_json_path = sys.argv[3] if len(sys.argv) > 3 else None
 
     try:
-        main(cc_jsonl_output, target)
+        main(cc_jsonl_output, target, claude_json_path)
     except Exception as e:
         logging.exception(f"Error extracting metrics: {e}", exc_info=True)
         sys.exit(1)
