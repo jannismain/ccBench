@@ -1,12 +1,15 @@
 # Fair Share
+
 Build a web-based cost-splitting platform for small groups named "Fair Share".
 
 The product should help groups of people track shared expenses, calculate who owes whom, and settle balances transparently.
 
 ## Goal
+
 Deliver a production-ready software solution for splitting expenses in groups such as trips, dinners, flat-sharing, or events.
 
 ## Required product scope
+
 The solution must include all of the following capabilities:
 
 1. **User accounts and authentication**
@@ -52,6 +55,7 @@ The solution must include all of the following capabilities:
    - Where user input is required, use reasonable defaults to minimize required user actions and make entries as simple as possible.
 
 ## Delivery constraints
+
 The solution must follow these constraints:
 
 - Build a **web application**
@@ -64,8 +68,10 @@ The solution must follow these constraints:
 - Provide a README with setup instructions and a brief architectural overview.
 - Include tests that cover critical business logic and edge cases.
 - Include end to end tests that validate the main user flows (e.g., creating a group, adding an expense, recording a settlement).
+  - each test should have a timeout of 10 seconds to ensure they run efficiently and do not hang indefinitely.
 
 ## Acceptance criteria
+
 A reviewer should be able to verify the following:
 
 - A new user can register and create a group.
