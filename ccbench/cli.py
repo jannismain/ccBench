@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 
 from .compare import cmd_compare
 from .experiment import run_experiment
+from .retry import retry as retry_results
 
 
 def run(
@@ -36,11 +37,21 @@ def compare(
     cmd_compare(list(result_dirs), across=across, json_output=json)
 
 
+def retry(
+    *result_dirs: str,
+    step: tuple[str, ...] = (),
+    task: tuple[str, ...] = (),
+) -> None:
+    """Retry failed or selected result steps."""
+    retry_results(list(result_dirs), steps=step, tasks=task)
+
+
 def build_app() -> App:
     app = App(name="ccbench", help="Run and analyze ccBench experiments")
     app.default(run)
     app.command(run, name="run", help="Run an experiment")
     app.command(compare, name="compare", help="Compare experiment results")
+    app.command(retry, name="retry", help="Retry failed or selected result steps")
     return app
 
 

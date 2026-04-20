@@ -68,10 +68,19 @@ uv run ccbench run --shard claude_code --shard cc_caveman --task aoc_2025_10
 
 # Limit an ad-hoc experiment to specific evals
 uv run ccbench run --shard claude_code --task aoc_2025_10 --eval cloc --eval claude_code_metrics
+
+# Retry failed steps in an existing experiment result
+uv run ccbench retry results/20260417_164519_simple
+
+# Retry a manually selected step in one task result
+uv run ccbench retry results/20260417_164519_simple/tasks/aoc_2025_01 --step 'run.*.claude_code.sh'
 ```
 
 Ad-hoc experiments include every available eval shard by default. Passing one or
 more `--eval` flags replaces that default list with the evals you specify.
+
+Retry uses each task directory's `.ccbench-status.json` to find failed steps.
+Use repeated `--step` flags to retry exact script names or globs manually.
 
 ## Available Evaluations
 

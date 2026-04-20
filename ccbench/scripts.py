@@ -1,4 +1,5 @@
 import fcntl
+import json
 import os
 import pty
 import select
@@ -8,9 +9,12 @@ import subprocess
 import sys
 import termios
 import tty
+from datetime import datetime
 from pathlib import Path
 
 from .log import log
+
+STATUS_FILE = ".ccbench-status.json"
 
 
 def run_script_with_env_capture(
@@ -64,7 +68,40 @@ exit $__exit_code
             termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
         os.close(master_fd)
 
+    record_script_status(script, return_code)
     return return_code, read_captured_env(env_file, env)
+
+
+def load_script_statuses(working_dir: Path) -> dict:
+    status_file = working_dir / STATUS_FILE
+    if not status_file.exists():
+        return {"scripts": {}}
+    try:
+        data = json.loads(status_file.read_text())
+    except json.JSONDecodeError:
+        log.warning(f"Failed to parse script status file: {status_file}")
+        return {"scripts": {}}
+    if not isinstance(data, dict):
+        return {"scripts": {}}
+    data.setdefault("scripts", {})
+    return data
+
+
+def record_script_status(script: Path, return_code: int) -> None:
+    status_file = script.parent / STATUS_FILE
+    data = load_script_statuses(script.parent)
+    scripts = data.setdefault("scripts", {})
+    entry = scripts.setdefault(script.name, {"attempts": []})
+    finished_at = datetime.now().isoformat(timespec="seconds")
+    attempt = {
+        "finished_at": finished_at,
+        "return_code": return_code,
+    }
+    entry.setdefault("attempts", []).append(attempt)
+    entry["last_finished_at"] = finished_at
+    entry["return_code"] = return_code
+    entry["log"] = script.with_suffix(".log").name
+    status_file.write_text(json.dumps(data, indent=2, sort_keys=True))
 
 
 def capture_pty_output(
@@ -202,4 +239,3 @@ def ensure_project_git_repo(project_dir: Path) -> None:
                 f"Failed to initialize git repo in {project_dir}: "
                 f"{' '.join(command)}\n{result.stderr.strip()}"
             )
-

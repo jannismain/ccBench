@@ -38,8 +38,10 @@ from ccbench.paths import (
     CCBENCH_IGNORE,
     STAGING_SCRIPT,
 )
+from ccbench.retry import retry, select_retry_scripts
 from ccbench.scripts import (
     ensure_project_git_repo,
+    load_script_statuses,
     run_scripts_with_env_propagation,
 )
 from ccbench.shards import (
@@ -768,6 +770,8 @@ class TestScriptExecution:
         assert not success
         # Second script's log should not exist
         assert not (tmp_path / "setup.001.second.log").exists()
+        statuses = load_script_statuses(tmp_path)["scripts"]
+        assert statuses["setup.000.first.sh"]["return_code"] == 1
 
     def test_run_continues_on_failure(self, tmp_path):
         """Run scripts continue execution on failure."""
@@ -783,6 +787,9 @@ class TestScriptExecution:
         assert not success
         # But second script's log should exist (it ran)
         assert (tmp_path / "run.001.second.log").exists()
+        statuses = load_script_statuses(tmp_path)["scripts"]
+        assert statuses["run.000.first.sh"]["return_code"] == 1
+        assert statuses["run.001.second.sh"]["return_code"] == 0
 
     def test_shard_ordering(self, tmp_path):
         """Scripts execute in config -> task -> eval order via consecutive indices."""
@@ -1285,6 +1292,22 @@ class TestBuildApp:
         _, args = self.parse_args(["compare"])
         assert args["result_dirs"] == ()
 
+    def test_retry_parses_result_dirs_and_steps(self):
+        command, args = self.parse_args(
+            [
+                "retry",
+                "results/demo",
+                "--step",
+                "run.*.claude_code.sh",
+                "--task",
+                "demo_task",
+            ]
+        )
+        assert command.__name__ == "retry"
+        assert args["result_dirs"] == ("results/demo",)
+        assert args["step"] == ("run.*.claude_code.sh",)
+        assert args["task"] == ("demo_task",)
+
 
 class TestAdHocExperiment:
     """Tests for ad-hoc experiment construction."""
@@ -1395,6 +1418,70 @@ class TestAdHocExperiment:
         assert (task_root / "beta.txt").exists()
         assert (task_root / "delta.txt").exists()
         assert (task_root / "gamma.txt").exists()
+
+
+class TestRetryCommand:
+    """Tests for retrying existing result steps."""
+
+    def make_task_result(self, tmp_path):
+        task_dir = tmp_path / "results" / "exp" / "tasks" / "demo"
+        task_dir.mkdir(parents=True)
+        (task_dir / "project").mkdir()
+        return task_dir
+
+    def test_select_retry_scripts_uses_failed_statuses(self, tmp_path):
+        task_dir = self.make_task_result(tmp_path)
+        failing = task_dir / "run.000.first.sh"
+        passing = task_dir / "run.001.second.sh"
+        failing.write_text("#!/bin/bash\nexit 1\n")
+        passing.write_text("#!/bin/bash\nexit 0\n")
+        run_scripts_with_env_propagation(
+            "run.*.sh", task_dir, {}, stop_on_failure=False
+        )
+
+        assert select_retry_scripts(task_dir, ()) == [failing]
+
+    def test_select_retry_scripts_matches_explicit_glob(self, tmp_path):
+        task_dir = self.make_task_result(tmp_path)
+        first = task_dir / "run.000.first.sh"
+        second = task_dir / "run.001.second.sh"
+        first.write_text("#!/bin/bash\n")
+        second.write_text("#!/bin/bash\n")
+
+        assert select_retry_scripts(task_dir, ("run.*.second.sh",)) == [second]
+
+    def test_retry_failed_steps(self, tmp_path):
+        task_dir = self.make_task_result(tmp_path)
+        marker = task_dir / "retry-count.txt"
+        script = task_dir / "run.000.flaky.sh"
+        script.write_text(
+            "#!/bin/bash\n"
+            "count=$(cat retry-count.txt 2>/dev/null || echo 0)\n"
+            "count=$((count + 1))\n"
+            "echo $count > retry-count.txt\n"
+            "if [ \"$count\" -eq 1 ]; then exit 1; fi\n"
+        )
+        run_scripts_with_env_propagation(
+            "run.*.sh", task_dir, {}, stop_on_failure=False
+        )
+
+        retry([str(tmp_path / "results" / "exp")])
+
+        assert marker.read_text().strip() == "2"
+        statuses = load_script_statuses(task_dir)["scripts"]
+        assert statuses["run.000.flaky.sh"]["return_code"] == 0
+        assert len(statuses["run.000.flaky.sh"]["attempts"]) == 2
+
+    def test_retry_explicit_step_without_status(self, tmp_path):
+        task_dir = self.make_task_result(tmp_path)
+        marker = task_dir / "manual.txt"
+        (task_dir / "run.000.manual.sh").write_text(
+            "#!/bin/bash\necho retried > manual.txt\n"
+        )
+
+        retry([str(task_dir)], steps=("run.000.manual.sh",))
+
+        assert marker.read_text().strip() == "retried"
 
 
 class TestParsePytest:
