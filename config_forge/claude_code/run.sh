@@ -6,7 +6,8 @@ export CLAUDE_CONFIG_DIR="$SCRIPT_DIR/.claude-runtime"
 mkdir -p "$CLAUDE_CONFIG_DIR"
 export CLAUDE=${CLAUDE:-~/.local/bin/claude}
 
-CLAUDE_OPTS="--print --verbose --output-format stream-json --dangerously-skip-permissions --setting-sources project"
+CLAUDE_LOCAL_SETTINGS_ARG="--setting-sources project"
+CLAUDE_OPTS="--print --verbose --output-format stream-json --dangerously-skip-permissions ${CLAUDE_LOCAL_SETTINGS_ARG}"
 
 if [ -f prompt.md ]; then
     echo "Using prompt.md"
@@ -20,4 +21,7 @@ else
 fi
 
 cd project
+$CLAUDE $CLAUDE_LOCAL_SETTINGS_ARG plugins list | tee -a ../claude_code_environment.md
+$CLAUDE $CLAUDE_LOCAL_SETTINGS_ARG agents list | tee -a ../claude_code_environment.md
+$CLAUDE $CLAUDE_LOCAL_SETTINGS_ARG mcp list | tee -a ../claude_code_environment.md
 $CLAUDE $CLAUDE_OPTS "$PROMPT" | tee -a ../output.json
