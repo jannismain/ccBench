@@ -6,11 +6,21 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "coloredlogs>=15.0.1",
+    "cyclopts>=4.10.2",
     "pathspec>=1.0.4",
     "python-dotenv>=1.2.2",
     "pyyaml",
     "tomli-w>=1.2.0",
 ]
+
+[project.scripts]
+ccbench = "ccbench.cli:main"
+
+[tool.uv]
+package = true
+
+[tool.setuptools.packages.find]
+include = ["ccbench*"]
 
 [tool.ruff]
 line-length = 94

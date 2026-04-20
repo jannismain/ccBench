@@ -33,8 +33,8 @@ ccBench is a benchmarking suite designed to evaluate the performance of various 
 
 To run an experiment, use the following command:
 
-```bash
-uv run ccBench.py <experiment.yaml>
+```shell
+uv run ccbench [experiment.yaml]
 ```
 
 ### Command-Line Options
@@ -47,22 +47,40 @@ uv run ccBench.py <experiment.yaml>
 
 ### Examples
 
-```bash
+```shell
 # Run all variants in an experiment
-uv run ccBench.py spec-driven-comparison.yaml
+uv run ccbench spec-driven-comparison.yaml
 
 # Run baseline variant only
-uv run ccBench.py spec-driven-comparison.yaml --variant baseline
+uv run ccbench spec-driven-comparison.yaml --variant baseline
 
 # Run one task from the experiment
-uv run ccBench.py spec-driven-comparison.yaml --task c4-stop-button
+uv run ccbench spec-driven-comparison.yaml --task c4-stop-button
 
 # Prepare directories and setup without executing run scripts
-uv run ccBench.py spec-driven-comparison.yaml --skip-run
+uv run ccbench spec-driven-comparison.yaml --skip-run
 
 # Write results to a custom directory
-uv run ccBench.py spec-driven-comparison.yaml --results-dir /tmp/ccbench-results
+uv run ccbench spec-driven-comparison.yaml --results-dir /tmp/ccbench-results
+
+# Run an ad-hoc experiment without writing a YAML file first
+uv run ccbench run --shard claude_code --shard cc_caveman --task aoc_2025_10
+
+# Limit an ad-hoc experiment to specific evals
+uv run ccbench run --shard claude_code --task aoc_2025_10 --eval cloc --eval claude_code_metrics
+
+# Retry failed steps in an existing experiment result
+uv run ccbench retry results/20260417_164519_simple
+
+# Retry a manually selected step in one task result
+uv run ccbench retry results/20260417_164519_simple/tasks/aoc_2025_01 --step 'run.*.claude_code.sh'
 ```
+
+Ad-hoc experiments include every available eval shard by default. Passing one or
+more `--eval` flags replaces that default list with the evals you specify.
+
+Retry uses each task directory's `.ccbench-status.json` to find failed steps.
+Use repeated `--step` flags to retry exact script names or globs manually.
 
 ## Available Evaluations
 

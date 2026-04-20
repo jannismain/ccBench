@@ -1,11 +1,10 @@
 tasks:
   - cw_perfect_power
-  - fair-share
 
 variants:
   baseline: []
-  caveman:
-    - cc_caveman
+  code-simplifier:
+    - cc_code_simplifier
 
 configs:
   - claude_code
