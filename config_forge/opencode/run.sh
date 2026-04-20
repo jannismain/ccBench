@@ -16,4 +16,4 @@ fi
 
 cd project
 $OPENCODE --version
-$OPENCODE run "$PROMPT" | tee ../opencode_output.json
+$OPENCODE run "$PROMPT" | tee -a ../opencode_output.json
