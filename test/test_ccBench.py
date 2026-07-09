@@ -26,6 +26,8 @@ from ccbench.compare import (
     reference_indices_for_task_entries,
     render_comparison_json,
     render_comparison_table,
+    render_grouped_comparison_json,
+    render_grouped_comparison_table,
     resolve_task_dirs,
 )
 from ccbench.experiment import (
@@ -1079,7 +1081,9 @@ class TestProjectGitRepo:
         assert self.run_git(["rev-parse", "--show-toplevel"], project_dir) == str(
             project_dir.resolve()
         )
-        assert self.run_git(["log", "--format=%s", "-1"], project_dir) == "before experiment"
+        assert self.run_git(["log", "--format=%s", "-1"], project_dir) == (
+            "ccbench initial state"
+        )
 
     def test_ensure_project_git_repo_creates_nested_repo_inside_parent_checkout(
         self, tmp_path
@@ -1269,6 +1273,14 @@ class TestBuildApp:
     def test_old_style_invocation_maps_to_run(self):
         """Passing experiment name directly is preprocessed to the run subcommand."""
         assert _preprocess_tokens(["simple.yaml"]) == ["run", "simple.yaml"]
+
+    def test_old_style_option_first_invocation_maps_to_run(self):
+        """Run options before the experiment are still routed to the run command."""
+        assert _preprocess_tokens(["--skip-run", "simple.yaml"]) == [
+            "run",
+            "--skip-run",
+            "simple.yaml",
+        ]
 
     def test_explicit_run_subcommand(self):
         with patch("ccbench.cli.run_experiment") as mock:
@@ -2069,13 +2081,46 @@ class TestCompareTable:
             ]
         )
 
-        from ccbench.compare import render_grouped_comparison_table
-
         table = render_grouped_comparison_table(task_results)
         assert "baseline (n=2)" in table
         assert "variant (n=1)" in table
         assert "$0.2000 [$0.1000..$0.3000]" in table
         assert "$0.4000 (+100%)" in table
+
+    def test_grouped_compare_uses_first_variant_when_no_baseline_exists(self, tmp_path):
+        task_a = tmp_path / "tasks" / "task_openspec"
+        task_b = tmp_path / "tasks" / "task_bmad"
+        for path, cost in [(task_a, 1.0), (task_b, 2.0)]:
+            path.mkdir(parents=True)
+            (path / "claude_code_metrics.json").write_text(
+                json.dumps(
+                    {
+                        "overall": {
+                            "total_cost_usd": cost,
+                            "duration_ms": 10000,
+                            "num_turns": 4,
+                            "is_error": False,
+                            "usage": {
+                                "input_tokens": 5,
+                                "output_tokens": 100,
+                                "cache_read_input_tokens": 0,
+                            },
+                        }
+                    }
+                )
+            )
+
+        task_results = build_task_results(
+            [
+                ("task_openspec", task_a),
+                ("task_bmad", task_b),
+            ]
+        )
+        table = render_grouped_comparison_table(task_results)
+        data = json.loads(render_grouped_comparison_json(task_results))
+
+        assert "$2.0000 (+100%)" in table
+        assert data["tasks"]["task"]["metric_changes_pct"]["cost_usd"] == [None, 100.0]
 
     def test_percent_change_skips_zero_baseline(self):
         columns = ["baseline", "variant"]
