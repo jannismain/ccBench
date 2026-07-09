@@ -1,0 +1,9 @@
+{
+    "env": {
+        "ANTHROPIC_BASE_URL": "https://router.eu.requesty.ai",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "vertex/claude-sonnet-4-6@europe-west1",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "vertex/claude-haiku-4-5@europe-west1",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "vertex/claude-opus-4-8@eu",
+        "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"
+    }
+}

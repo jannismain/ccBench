@@ -1,3 +1,6 @@
+env:
+  ANTHROPIC_MODEL: haiku
+
 tasks:
   - aoc_2025_01
 
@@ -6,3 +9,4 @@ configs:
 
 evals:
   - cloc
+  - claude_code_metrics

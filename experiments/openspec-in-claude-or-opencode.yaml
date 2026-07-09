@@ -1,0 +1,22 @@
+env:
+  MODEL:
+
+tasks:
+  - debug
+
+variants:
+  claude:
+    - claude_code
+    - requesty_for_claude_code
+    - openspec:
+        env:
+          TOOLS: claude
+  opencode:
+    - opencode
+    - openspec:
+        env:
+          TOOLS: opencode
+
+evals:
+  - cloc
+  - claude_code_metrics

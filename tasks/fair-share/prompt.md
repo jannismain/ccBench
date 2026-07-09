@@ -83,3 +83,7 @@ A reviewer should be able to verify the following:
 - A recorded settlement reduces outstanding balances.
 - Relevant users can see notifications in the application.
 - The UI is usable on mobile and desktop layouts.
+
+## Note
+
+You are in autonomous mode. Accept any reasonable assumptions you need to make to complete the task. You can use any tools, libraries, or frameworks you deem appropriate. Focus on delivering a functional and maintainable solution that meets the requirements outlined above. You may enter and exit Plan mode as you wish.

@@ -1,0 +1,19 @@
+env:
+  ANTHROPIC_MODEL: haiku
+
+tasks:
+  - debug
+
+variants:
+  baseline:
+    - claude_code
+  sonnet:
+    - claude_code:
+        env:
+          ANTHROPIC_MODEL: sonnet
+
+configs:
+  - requesty_for_claude_code
+
+evals:
+  - claude_code_metrics

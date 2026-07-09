@@ -1,0 +1,10 @@
+tasks:
+  - next-number-square
+
+configs:
+  - llm_lmstudio
+
+evals:
+  - exact_answer:
+      env:
+        EXACT_ANSWER_EXPECTED: "41384454324123574919196129"

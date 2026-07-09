@@ -1,6 +1,9 @@
 tasks:
   - cw_perfect_power
+  - aoc_2025_01
+  - aoc_2025_10
   - fair-share
+  - ccBench
 
 variants:
   baseline: []
@@ -13,6 +16,6 @@ configs:
 evals:
   - cloc
   - claude_code_metrics
-  - test_pass_rate
+  - pytest_pass_rate
   - static_analysis
   - judge_session

@@ -24,7 +24,7 @@ variants:
     - speckit
 
 configs:
-  - portkey_for_claude_code
+  - requesty_for_claude_code
 
 evals:
   - claude_code_metrics
