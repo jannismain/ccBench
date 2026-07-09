@@ -1,22 +1,29 @@
 """Tests for ccBench file merging functionality."""
 
+import importlib.util
 import json
 import os
 import subprocess
 import tomllib
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import tomli_w
 import yaml
+from typer.testing import CliRunner
 
-from ccbench.cli import build_app
+from ccbench.cli import _preprocess_tokens, app
 from ccbench.compare import (
+    build_task_results,
     extract_from_claude_metrics,
     extract_from_cloc,
+    extract_from_exact_answer,
     extract_from_judge_scores,
     extract_from_static_analysis,
     extract_from_test_pass_rate,
     extract_metrics_summary,
+    reference_indices_for_task_entries,
     render_comparison_json,
     render_comparison_table,
     resolve_task_dirs,
@@ -35,7 +42,9 @@ from ccbench.files import (
 )
 from ccbench.paths import (
     CCBENCH_DIR,
+    CCBENCH_HOME,
     CCBENCH_IGNORE,
+    RESULTS,
     STAGING_SCRIPT,
 )
 from ccbench.retry import retry, select_retry_scripts
@@ -49,6 +58,25 @@ from ccbench.shards import (
     parse_shard_entry,
     process_shard,
 )
+
+
+def load_exact_answer_module():
+    module_path = Path(__file__).parent.parent / "evals" / "exact_answer" / "parse_answer.py"
+    spec = importlib.util.spec_from_file_location("exact_answer_parse", module_path)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestPaths:
+    """Tests for shared filesystem paths."""
+
+    def test_default_results_dir_is_ccbench_home(self):
+        """Default results are written outside the repository."""
+        assert CCBENCH_HOME == Path.home() / ".ccbench"
+        assert RESULTS == CCBENCH_HOME / "results"
 
 
 class TestDeepMergeDict:
@@ -1216,9 +1244,7 @@ class TestEnvPrecedence:
 
         sonnet_env = (sonnet_dir / ".env").read_text()
         last_model_line = [
-            line
-            for line in sonnet_env.splitlines()
-            if line.startswith("ANTHROPIC_MODEL=")
+            line for line in sonnet_env.splitlines() if line.startswith("ANTHROPIC_MODEL=")
         ][-1]
         assert last_model_line == "ANTHROPIC_MODEL=sonnet", (
             f"Shard-level env should be last and win, got: {last_model_line}\n"
@@ -1234,79 +1260,105 @@ class TestEnvPrecedence:
         assert "ANTHROPIC_MODEL=haiku" in baseline_env
 
 
-class TestBuildApp:
-    """Tests for Cyclopts CLI argument parsing with subcommands."""
+_runner = CliRunner()
 
-    def parse_args(self, tokens):
-        command, bound, _ = build_app().parse_args(tokens)
-        bound.apply_defaults()
-        return command, bound.arguments
+
+class TestBuildApp:
+    """Tests for Typer CLI argument parsing with subcommands."""
 
     def test_old_style_invocation_maps_to_run(self):
-        """Passing experiment name directly still uses the default run command."""
-        command, args = self.parse_args(["simple.yaml"])
-        assert command.__name__ == "run"
-        assert args["experiment"] == "simple.yaml"
+        """Passing experiment name directly is preprocessed to the run subcommand."""
+        assert _preprocess_tokens(["simple.yaml"]) == ["run", "simple.yaml"]
 
     def test_explicit_run_subcommand(self):
-        command, args = self.parse_args(["run", "simple.yaml"])
-        assert command.__name__ == "run"
-        assert args["experiment"] == "simple.yaml"
+        with patch("ccbench.cli.run_experiment") as mock:
+            result = _runner.invoke(app, ["run", "simple.yaml"])
+            assert result.exit_code == 0
+            mock.assert_called_once_with(
+                "simple.yaml",
+                shards=(),
+                evals=(),
+                variant=None,
+                task=None,
+                skip_run=False,
+                results_dir=None,
+            )
 
     def test_ad_hoc_run_subcommand(self):
-        command, args = self.parse_args(
-            [
-                "run",
-                "--shard",
-                "claude_code",
-                "--shard",
-                "cc_caveman",
-                "--task",
-                "aoc_2025_10",
-                "--eval",
-                "cloc",
-                "--eval",
-                "claude_code_metrics",
-            ]
-        )
-        assert command.__name__ == "run"
-        assert args["experiment"] is None
-        assert args["shard"] == ("claude_code", "cc_caveman")
-        assert args["eval"] == ("cloc", "claude_code_metrics")
-        assert args["task"] == "aoc_2025_10"
+        with patch("ccbench.cli.run_experiment") as mock:
+            result = _runner.invoke(
+                app,
+                [
+                    "run",
+                    "--shard",
+                    "claude_code",
+                    "--shard",
+                    "cc_caveman",
+                    "--task",
+                    "aoc_2025_10",
+                    "--eval",
+                    "cloc",
+                    "--eval",
+                    "claude_code_metrics",
+                ],
+            )
+            assert result.exit_code == 0
+            mock.assert_called_once_with(
+                None,
+                shards=("claude_code", "cc_caveman"),
+                evals=("cloc", "claude_code_metrics"),
+                variant=None,
+                task="aoc_2025_10",
+                skip_run=False,
+                results_dir=None,
+            )
 
     def test_compare_parses_result_dirs(self):
-        command, args = self.parse_args(["compare", "dir1", "dir2"])
-        assert command.__name__ == "compare"
-        assert args["result_dirs"] == ("dir1", "dir2")
+        with patch("ccbench.cli.cmd_compare") as mock:
+            result = _runner.invoke(app, ["compare", "dir1", "dir2"])
+            assert result.exit_code == 0
+            mock.assert_called_once_with(["dir1", "dir2"], across=False, json_output=False)
 
     def test_compare_across_flag(self):
-        _, args = self.parse_args(["compare", "--across", "dir1", "dir2"])
-        assert args["across"] is True
+        with patch("ccbench.cli.cmd_compare") as mock:
+            result = _runner.invoke(app, ["compare", "--across", "dir1", "dir2"])
+            assert result.exit_code == 0
+            _, kwargs = mock.call_args
+            assert kwargs["across"] is True
 
     def test_compare_json_flag(self):
-        _, args = self.parse_args(["compare", "--json", "dir1"])
-        assert args["json"] is True
+        with patch("ccbench.cli.cmd_compare") as mock:
+            result = _runner.invoke(app, ["compare", "--json", "dir1"])
+            assert result.exit_code == 0
+            _, kwargs = mock.call_args
+            assert kwargs["json_output"] is True
 
     def test_compare_no_args_defaults_to_empty_list(self):
-        _, args = self.parse_args(["compare"])
-        assert args["result_dirs"] == ()
+        with patch("ccbench.cli.cmd_compare") as mock:
+            result = _runner.invoke(app, ["compare"])
+            assert result.exit_code == 0
+            args, _ = mock.call_args
+            assert args[0] == []
 
     def test_retry_parses_result_dirs_and_steps(self):
-        command, args = self.parse_args(
-            [
-                "retry",
-                "results/demo",
-                "--step",
-                "run.*.claude_code.sh",
-                "--task",
-                "demo_task",
-            ]
-        )
-        assert command.__name__ == "retry"
-        assert args["result_dirs"] == ("results/demo",)
-        assert args["step"] == ("run.*.claude_code.sh",)
-        assert args["task"] == ("demo_task",)
+        with patch("ccbench.cli.retry_results") as mock:
+            result = _runner.invoke(
+                app,
+                [
+                    "retry",
+                    "results/demo",
+                    "--step",
+                    "run.*.claude_code.sh",
+                    "--task",
+                    "demo_task",
+                ],
+            )
+            assert result.exit_code == 0
+            mock.assert_called_once_with(
+                ["results/demo"],
+                steps=("run.*.claude_code.sh",),
+                tasks=("demo_task",),
+            )
 
 
 class TestAdHocExperiment:
@@ -1344,8 +1396,7 @@ class TestAdHocExperiment:
             "evals": ["claude_code_metrics", "cloc"],
         }
         assert (
-            build_ad_hoc_experiment_name(config)
-            == "adhoc_aoc_2025_10_claude_code_cc_caveman"
+            build_ad_hoc_experiment_name(config) == "adhoc_aoc_2025_10_claude_code_cc_caveman"
         )
 
     def test_build_ad_hoc_experiment_config_custom_evals_override_default(
@@ -1435,9 +1486,7 @@ class TestRetryCommand:
         passing = task_dir / "run.001.second.sh"
         failing.write_text("#!/bin/bash\nexit 1\n")
         passing.write_text("#!/bin/bash\nexit 0\n")
-        run_scripts_with_env_propagation(
-            "run.*.sh", task_dir, {}, stop_on_failure=False
-        )
+        run_scripts_with_env_propagation("run.*.sh", task_dir, {}, stop_on_failure=False)
 
         assert select_retry_scripts(task_dir, ()) == [failing]
 
@@ -1459,11 +1508,9 @@ class TestRetryCommand:
             "count=$(cat retry-count.txt 2>/dev/null || echo 0)\n"
             "count=$((count + 1))\n"
             "echo $count > retry-count.txt\n"
-            "if [ \"$count\" -eq 1 ]; then exit 1; fi\n"
+            'if [ "$count" -eq 1 ]; then exit 1; fi\n'
         )
-        run_scripts_with_env_propagation(
-            "run.*.sh", task_dir, {}, stop_on_failure=False
-        )
+        run_scripts_with_env_propagation("run.*.sh", task_dir, {}, stop_on_failure=False)
 
         retry([str(tmp_path / "results" / "exp")])
 
@@ -1484,81 +1531,6 @@ class TestRetryCommand:
         assert marker.read_text().strip() == "retried"
 
 
-class TestParsePytest:
-    """Tests for pytest log parsing (used by test_pass_rate eval)."""
-
-    def test_strip_ansi(self):
-        from evals.test_pass_rate.parse_pytest import strip_ansi
-
-        text = "\x1b[32m4 passed\x1b[0m in 0.14s"
-        assert strip_ansi(text) == "4 passed in 0.14s"
-
-    def test_parse_all_passed(self):
-        from evals.test_pass_rate.parse_pytest import parse_pytest_summary
-
-        log = "======== 4 passed in 0.14s ========"
-        result = parse_pytest_summary(log)
-        assert result is not None
-        assert result["tests_passed"] == 4
-        assert result["tests_failed"] == 0
-        assert result["tests_run"] == 4
-        assert result["pass_rate"] == 1.0
-        assert result["duration_s"] == pytest.approx(0.14)
-
-    def test_parse_mixed_results(self):
-        from evals.test_pass_rate.parse_pytest import parse_pytest_summary
-
-        log = "======== 2 passed, 1 failed in 0.5s ========"
-        result = parse_pytest_summary(log)
-        assert result is not None
-        assert result["tests_passed"] == 2
-        assert result["tests_failed"] == 1
-        assert result["tests_run"] == 3
-        assert result["duration_s"] == pytest.approx(0.5)
-
-    def test_parse_with_errors_and_skipped(self):
-        from evals.test_pass_rate.parse_pytest import parse_pytest_summary
-
-        log = "======== 3 passed, 1 failed, 2 errors, 1 skipped in 1.2s ========"
-        result = parse_pytest_summary(log)
-        assert result is not None
-        assert result["tests_passed"] == 3
-        assert result["tests_failed"] == 3  # 1 failed + 2 errors
-        assert result["tests_skipped"] == 1
-        assert result["tests_run"] == 7
-
-    def test_parse_duration_with_minutes(self):
-        from evals.test_pass_rate.parse_pytest import parse_pytest_summary
-
-        log = "======== 10 passed in 1m 3.45s ========"
-        result = parse_pytest_summary(log)
-        assert result is not None
-        assert result["duration_s"] == pytest.approx(63.45)
-
-    def test_parse_no_pytest_output(self):
-        from evals.test_pass_rate.parse_pytest import parse_pytest_summary
-
-        log = "just some random log output\nnothing to see here"
-        assert parse_pytest_summary(log) is None
-
-    def test_parse_with_ansi_codes(self):
-        from evals.test_pass_rate.parse_pytest import parse_pytest_summary
-
-        # Real pytest output has ANSI codes around the summary
-        log = "\x1b[32m========== \x1b[32m\x1b[1m4 passed\x1b[0m\x1b[32m in 0.14s\x1b[0m\x1b[32m ===========\x1b[0m"
-        result = parse_pytest_summary(log)
-        assert result is not None
-        assert result["tests_passed"] == 4
-
-    def test_extract_failures(self):
-        from evals.test_pass_rate.parse_pytest import extract_failures
-
-        log = "FAILED test_solution.py::test_big_numbers - AssertionError\nFAILED test_solution.py::test_edge"
-        failures = extract_failures(log)
-        assert len(failures) == 2
-        assert "test_solution.py::test_big_numbers" in failures
-
-
 class TestMetricExtraction:
     """Tests for eval JSON extractors."""
 
@@ -1574,14 +1546,62 @@ class TestMetricExtraction:
                     "output_tokens": 555,
                     "cache_read_input_tokens": 114530,
                 },
+                "model_usage": {
+                    "model-a": {
+                        "inputTokens": 10,
+                        "cacheCreationInputTokens": 5,
+                        "cacheReadInputTokens": 15,
+                        "outputTokens": 30,
+                        "costUSD": 0.60,
+                    },
+                    "model-b": {
+                        "inputTokens": 20,
+                        "cacheCreationInputTokens": 0,
+                        "cacheReadInputTokens": 10,
+                        "outputTokens": 30,
+                        "costUSD": 0.60,
+                    },
+                },
             }
         }
         result = extract_from_claude_metrics(data)
         assert result["cost_usd"] == 0.057747
+        assert result["input_token_cost_usd"] == pytest.approx(0.30)
+        assert result["cache_token_cost_usd"] == pytest.approx(0.30)
+        assert result["output_token_cost_usd"] == pytest.approx(0.60)
         assert result["duration_s"] == 13.36
         assert result["turns"] == 4
-        assert result["output_tokens"] == 555
+        assert result["total_tokens"] == 120
+        assert result["input_tokens"] == 30
+        assert result["cache_tokens"] == 30
+        assert result["output_tokens"] == 60
         assert result["is_error"] is False
+
+    def test_extract_from_claude_metrics_allocates_usage_costs_without_model_usage(self):
+        data = {
+            "overall": {
+                "total_cost_usd": 0.50,
+                "duration_ms": 1000,
+                "num_turns": 1,
+                "is_error": False,
+                "usage": {
+                    "input_tokens": 10,
+                    "cache_creation_input_tokens": 5,
+                    "cache_read_input_tokens": 5,
+                    "output_tokens": 30,
+                },
+            }
+        }
+
+        result = extract_from_claude_metrics(data)
+
+        assert result["input_tokens"] == 10
+        assert result["cache_tokens"] == 10
+        assert result["output_tokens"] == 30
+        assert result["total_tokens"] == 50
+        assert result["input_token_cost_usd"] == pytest.approx(0.10)
+        assert result["cache_token_cost_usd"] == pytest.approx(0.10)
+        assert result["output_token_cost_usd"] == pytest.approx(0.30)
 
     def test_extract_from_cloc(self):
         data = {"SUM": {"code": 9, "nFiles": 1, "blank": 0, "comment": 0}}
@@ -1590,7 +1610,13 @@ class TestMetricExtraction:
         assert result["loc_files"] == 1
 
     def test_extract_from_test_pass_rate_completed(self):
-        data = {"status": "completed", "pass_rate": 1.0, "tests_passed": 4, "tests_failed": 0, "duration_s": 0.14}
+        data = {
+            "status": "completed",
+            "pass_rate": 1.0,
+            "tests_passed": 4,
+            "tests_failed": 0,
+            "duration_s": 0.14,
+        }
         result = extract_from_test_pass_rate(data)
         assert result["test_pass_rate"] == 1.0
         assert result["tests_passed"] == 4
@@ -1628,26 +1654,126 @@ class TestMetricExtraction:
         assert result["judge_error_handling"] == 5
         assert result["judge_efficiency"] == 4
 
+    def test_extract_from_exact_answer(self):
+        data = {"status": "completed", "matched": True, "score": 1}
+        result = extract_from_exact_answer(data)
+        assert result["exact_answer_score"] == 1
+        assert result["exact_answer_matched"] is True
+
     def test_extract_metrics_summary_missing_files(self, tmp_path):
         result = extract_metrics_summary(tmp_path)
         assert result == {}
 
     def test_extract_metrics_summary_with_files(self, tmp_path):
-        (tmp_path / "claude_code_metrics.json").write_text(json.dumps({
-            "overall": {
-                "total_cost_usd": 0.05,
-                "duration_ms": 10000,
-                "num_turns": 3,
-                "is_error": False,
-                "usage": {"input_tokens": 5, "output_tokens": 100, "cache_read_input_tokens": 0},
-            }
-        }))
-        (tmp_path / "cloc.json").write_text(json.dumps({
-            "SUM": {"code": 15, "nFiles": 2, "blank": 1, "comment": 0}
-        }))
+        (tmp_path / "claude_code_metrics.json").write_text(
+            json.dumps(
+                {
+                    "overall": {
+                        "total_cost_usd": 0.05,
+                        "duration_ms": 10000,
+                        "num_turns": 3,
+                        "is_error": False,
+                        "usage": {
+                            "input_tokens": 5,
+                            "output_tokens": 100,
+                            "cache_read_input_tokens": 0,
+                        },
+                    }
+                }
+            )
+        )
+        (tmp_path / "cloc.json").write_text(
+            json.dumps({"SUM": {"code": 15, "nFiles": 2, "blank": 1, "comment": 0}})
+        )
         result = extract_metrics_summary(tmp_path)
         assert result["cost_usd"] == 0.05
         assert result["loc_total"] == 15
+
+
+class TestExactAnswerEval:
+    """Tests for the exact_answer eval shard."""
+
+    expected = "41384454324123574919196129"
+
+    @pytest.mark.parametrize(
+        "answer_text",
+        [
+            "41384454324123574919196129",
+            "41,384,454,324,123,574,919,196,129",
+            "41 384 454 324 123 574 919 196 129",
+            "41_384_454_324_123_574_919_196_129",
+            "4.1384454324123574919196129e25",
+            "41384454324123574919196128 + 1",
+        ],
+    )
+    def test_check_answer_accepts_equivalent_representations(self, answer_text):
+        """Equivalent numeric formats should pass the exact answer check."""
+        parser = load_exact_answer_module()
+        matched, matched_value = parser.check_answer(answer_text, self.expected)
+
+        assert matched is True
+        assert matched_value is not None
+
+    def test_check_answer_rejects_wrong_value(self):
+        """Wrong numeric answers should fail the exact answer check."""
+        parser = load_exact_answer_module()
+        matched, matched_value = parser.check_answer(
+            "41384454324123574919196128",
+            self.expected,
+        )
+
+        assert matched is False
+        assert matched_value is None
+
+    def test_collect_output_text_reads_claude_assistant_text(self, tmp_path):
+        """Claude JSONL output should be reduced to assistant text blocks."""
+        parser = load_exact_answer_module()
+        output = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "41,384,454,324,123,574,919,196,129",
+                    }
+                ]
+            },
+        }
+        (tmp_path / "output.json").write_text(json.dumps(output) + "\n")
+
+        text, sources = parser.collect_output_text(tmp_path)
+
+        assert sources == ["output.json"]
+        assert "41,384,454,324,123,574,919,196,129" in text
+
+    def test_collect_output_text_reads_response_text_first(self, tmp_path):
+        """Plain llm shard output should be evaluated directly."""
+        parser = load_exact_answer_module()
+        (tmp_path / "response.txt").write_text("41,384,454,324,123,574,919,196,129\n")
+        (tmp_path / "output.json").write_text(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "wrong"}]},
+                }
+            )
+            + "\n"
+        )
+
+        text, sources = parser.collect_output_text(tmp_path)
+
+        assert sources == ["response.txt", "output.json"]
+        assert text.splitlines()[0] == "41,384,454,324,123,574,919,196,129"
+
+    def test_collect_output_text_reads_numeric_response_as_plain_text(self, tmp_path):
+        """A bare numeric response file should not be treated as JSON output."""
+        parser = load_exact_answer_module()
+        (tmp_path / "response.txt").write_text("41384454324123574919196129\n")
+
+        text, sources = parser.collect_output_text(tmp_path)
+
+        assert sources == ["response.txt"]
+        assert text.strip() == "41384454324123574919196129"
 
 
 class TestCompareTable:
@@ -1656,16 +1782,50 @@ class TestCompareTable:
     def test_render_two_columns(self):
         columns = ["baseline", "variant-a"]
         metrics = [
-            {"cost_usd": 0.05, "turns": 4},
-            {"cost_usd": 0.30, "turns": 13},
+            {
+                "cost_usd": 0.05,
+                "input_token_cost_usd": 0.01,
+                "cache_token_cost_usd": 0.02,
+                "output_token_cost_usd": 0.02,
+                "duration_s": 10.0,
+                "turns": 4,
+                "total_tokens": 130,
+                "input_tokens": 10,
+                "cache_tokens": 20,
+                "output_tokens": 100,
+                "loc_total": 9,
+                "test_pass_rate": 0.5,
+            },
+            {
+                "cost_usd": 0.30,
+                "input_token_cost_usd": 0.12,
+                "cache_token_cost_usd": 0.06,
+                "output_token_cost_usd": 0.12,
+                "duration_s": 5.0,
+                "turns": 13,
+                "total_tokens": 168,
+                "input_tokens": 12,
+                "cache_tokens": 6,
+                "output_tokens": 150,
+                "loc_total": 7,
+                "test_pass_rate": 1.0,
+            },
         ]
         table = render_comparison_table(columns, metrics)
         assert "baseline" in table
         assert "variant-a" in table
         assert "$0.0500" in table
-        assert "$0.3000" in table
+        assert "$0.3000 (+500%)" in table
+        assert "Input token cost (USD)" in table
+        assert "$0.1200" in table
+        assert "168 (+29.2%)" in table
+        assert "Cache tokens" in table
+        assert "5.0 (-50%)" in table
+        assert "150 (+50%)" in table
+        assert "7 (-22.2%)" in table
         assert "4" in table
         assert "13" in table
+        assert "100% (+100%)" not in table
 
     def test_missing_values_show_dash(self):
         columns = ["a", "b"]
@@ -1693,14 +1853,245 @@ class TestCompareTable:
     def test_json_output_structure(self):
         columns = ["baseline", "variant"]
         metrics = [
-            {"cost_usd": 0.05, "turns": 4},
-            {"cost_usd": 0.30, "turns": 13},
+            {"cost_usd": 0.05, "turns": 4, "total_tokens": 100},
+            {"cost_usd": 0.30, "turns": 13, "total_tokens": 125},
         ]
         raw = render_comparison_json(columns, metrics)
         data = json.loads(raw)
         assert data["variants"] == ["baseline", "variant"]
         assert data["metrics"]["cost_usd"] == [0.05, 0.30]
+        assert data["metrics"]["total_tokens"] == [100, 125]
         assert data["metrics"]["turns"] == [4, 13]
+        assert data["metric_changes_pct"]["cost_usd"] == [None, 500.0]
+        assert data["metric_changes_pct"]["total_tokens"] == [None, 25.0]
+        assert "turns" not in data["metric_changes_pct"]
+
+    def test_percent_changes_use_matching_task_baseline(self):
+        columns = [
+            "task_a_baseline",
+            "task_a_variant",
+            "task_b_baseline",
+            "task_b_variant",
+        ]
+        metrics = [
+            {"cost_usd": 10.0},
+            {"cost_usd": 15.0},
+            {"cost_usd": 100.0},
+            {"cost_usd": 50.0},
+        ]
+
+        table = render_comparison_table(columns, metrics)
+        raw = render_comparison_json(columns, metrics)
+        data = json.loads(raw)
+
+        assert "$15.0000 (+50%)" in table
+        assert "$50.0000 (-50%)" in table
+        assert "$100.0000 (+900%)" not in table
+        assert data["metric_changes_pct"]["cost_usd"] == [None, 50.0, None, -50.0]
+
+    def test_baseline_variant_can_appear_after_other_variants(self):
+        columns = ["task_openspec", "task_baseline"]
+        metrics = [
+            {"duration_s": 30.0},
+            {"duration_s": 10.0},
+        ]
+
+        table = render_comparison_table(columns, metrics)
+        raw = render_comparison_json(columns, metrics)
+        data = json.loads(raw)
+
+        assert "30.0 (+200%)" in table
+        assert "10.0 (+200%)" not in table
+        assert data["metric_changes_pct"]["duration_s"] == [200.0, None]
+
+    def test_first_variant_is_reference_when_no_baseline_exists(self):
+        columns = ["task_openspec", "task_bmad"]
+        metrics = [
+            {"output_tokens": 100},
+            {"output_tokens": 150},
+        ]
+
+        table = render_comparison_table(columns, metrics)
+        raw = render_comparison_json(columns, metrics)
+        data = json.loads(raw)
+
+        assert "150 (+50%)" in table
+        assert data["metric_changes_pct"]["output_tokens"] == [None, 50.0]
+
+    def test_experiment_metadata_prevents_comparing_different_tasks(self, tmp_path):
+        result_root = tmp_path / "run"
+        tasks_dir = result_root / "tasks"
+        task_a = tasks_dir / "aoc_2025_01"
+        task_b = tasks_dir / "aoc_2025_02"
+        task_a.mkdir(parents=True)
+        task_b.mkdir()
+        (result_root / "simple.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "tasks": ["aoc_2025_01", "aoc_2025_02"],
+                    "configs": ["claude_code"],
+                }
+            )
+        )
+
+        reference_indices = reference_indices_for_task_entries(
+            [("aoc_2025_01", task_a), ("aoc_2025_02", task_b)]
+        )
+        raw = render_comparison_json(
+            ["aoc_2025_01", "aoc_2025_02"],
+            [{"cost_usd": 1.0}, {"cost_usd": 2.0}],
+            reference_indices,
+        )
+
+        assert reference_indices == [None, None]
+        assert "metric_changes_pct" not in json.loads(raw)
+
+    def test_experiment_metadata_groups_variants_by_task(self, tmp_path):
+        result_root = tmp_path / "run"
+        tasks_dir = result_root / "tasks"
+        paths = [
+            tasks_dir / "fair-share_openspec",
+            tasks_dir / "fair-share_baseline",
+            tasks_dir / "c4-stop-button_baseline",
+            tasks_dir / "c4-stop-button_openspec",
+        ]
+        for path in paths:
+            path.mkdir(parents=True)
+        (result_root / "spec-driven-comparison.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "tasks": ["fair-share", "c4-stop-button"],
+                    "variants": {"baseline": ["claude_code"], "openspec": ["openspec"]},
+                }
+            )
+        )
+
+        reference_indices = reference_indices_for_task_entries(
+            [(path.name, path) for path in paths]
+        )
+
+        assert reference_indices == [1, None, None, 2]
+
+    def test_build_task_results_aggregates_matching_task_variant(self, tmp_path):
+        run_a = tmp_path / "run-a"
+        run_b = tmp_path / "run-b"
+        task_a = run_a / "tasks" / "task_baseline"
+        task_b = run_b / "tasks" / "task_baseline"
+        task_a.mkdir(parents=True)
+        task_b.mkdir(parents=True)
+        for task_dir, cost, duration in [
+            (task_a, 0.10, 10_000),
+            (task_b, 0.30, 30_000),
+        ]:
+            (task_dir / "claude_code_metrics.json").write_text(
+                json.dumps(
+                    {
+                        "overall": {
+                            "total_cost_usd": cost,
+                            "duration_ms": duration,
+                            "num_turns": 4,
+                            "is_error": False,
+                            "usage": {
+                                "input_tokens": 5,
+                                "output_tokens": 100,
+                                "cache_read_input_tokens": 0,
+                            },
+                        }
+                    }
+                )
+            )
+
+        task_results = build_task_results(
+            [
+                ("run-a/task_baseline", task_a),
+                ("run-b/task_baseline", task_b),
+            ]
+        )
+
+        assert list(task_results) == ["task"]
+        assert task_results["task"]["variants"] == ["baseline"]
+        assert task_results["task"]["sample_counts"] == {"baseline": 2}
+        metrics = task_results["task"]["metrics"][0]
+        assert metrics["cost_usd"] == 0.2
+        assert metrics["duration_s"] == 20
+        assert metrics["turns"] == 4
+        assert metrics["total_tokens"] == 105
+        assert metrics["input_tokens"] == 5
+        assert metrics["cache_tokens"] == 0
+        assert metrics["output_tokens"] == 100
+        assert metrics["input_token_cost_usd"] == pytest.approx(0.0095238095)
+        assert metrics["cache_token_cost_usd"] == 0
+        assert metrics["output_token_cost_usd"] == pytest.approx(0.1904761905)
+        assert task_results["task"]["metric_stats"][0]["cost_usd"] == {
+            "mean": 0.2,
+            "min": 0.1,
+            "max": 0.3,
+            "count": 2,
+        }
+        assert task_results["task"]["metric_stats"][0]["duration_s"] == {
+            "mean": 20,
+            "min": 10.0,
+            "max": 30.0,
+            "count": 2,
+        }
+
+    def test_grouped_table_headers_include_sample_counts(self, tmp_path):
+        run_a = tmp_path / "run-a"
+        run_b = tmp_path / "run-b"
+        variant_a = run_a / "tasks" / "task_baseline"
+        variant_b = run_b / "tasks" / "task_baseline"
+        variant_c = run_a / "tasks" / "task_variant"
+        for path, cost in [(variant_a, 0.10), (variant_b, 0.30), (variant_c, 0.40)]:
+            path.mkdir(parents=True)
+            (path / "claude_code_metrics.json").write_text(
+                json.dumps(
+                    {
+                        "overall": {
+                            "total_cost_usd": cost,
+                            "duration_ms": 10000,
+                            "num_turns": 4,
+                            "is_error": False,
+                            "usage": {
+                                "input_tokens": 5,
+                                "output_tokens": 100,
+                                "cache_read_input_tokens": 0,
+                            },
+                        }
+                    }
+                )
+            )
+
+        task_results = build_task_results(
+            [
+                ("run-a/task_baseline", variant_a),
+                ("run-b/task_baseline", variant_b),
+                ("run-a/task_variant", variant_c),
+            ]
+        )
+
+        from ccbench.compare import render_grouped_comparison_table
+
+        table = render_grouped_comparison_table(task_results)
+        assert "baseline (n=2)" in table
+        assert "variant (n=1)" in table
+        assert "$0.2000 [$0.1000..$0.3000]" in table
+        assert "$0.4000 (+100%)" in table
+
+    def test_percent_change_skips_zero_baseline(self):
+        columns = ["baseline", "variant"]
+        metrics = [
+            {"cost_usd": 0, "duration_s": 0},
+            {"cost_usd": 1.0, "duration_s": 5.0},
+        ]
+
+        table = render_comparison_table(columns, metrics)
+        raw = render_comparison_json(columns, metrics)
+        data = json.loads(raw)
+
+        assert "$1.0000 (" not in table
+        assert "5.0 (" not in table
+        assert data["metric_changes_pct"]["cost_usd"] == [None, None]
+        assert data["metric_changes_pct"]["duration_s"] == [None, None]
 
 
 class TestResolveTaskDirs:
@@ -1751,18 +2142,26 @@ class TestCompareCommand:
         for name, cost, loc in [("task_baseline", 0.05, 9), ("task_variant", 0.30, 7)]:
             d = tasks / name
             d.mkdir()
-            (d / "claude_code_metrics.json").write_text(json.dumps({
-                "overall": {
-                    "total_cost_usd": cost,
-                    "duration_ms": 10000,
-                    "num_turns": 4,
-                    "is_error": False,
-                    "usage": {"input_tokens": 5, "output_tokens": 100, "cache_read_input_tokens": 0},
-                }
-            }))
-            (d / "cloc.json").write_text(json.dumps({
-                "SUM": {"code": loc, "nFiles": 1, "blank": 0, "comment": 0}
-            }))
+            (d / "claude_code_metrics.json").write_text(
+                json.dumps(
+                    {
+                        "overall": {
+                            "total_cost_usd": cost,
+                            "duration_ms": 10000,
+                            "num_turns": 4,
+                            "is_error": False,
+                            "usage": {
+                                "input_tokens": 5,
+                                "output_tokens": 100,
+                                "cache_read_input_tokens": 0,
+                            },
+                        }
+                    }
+                )
+            )
+            (d / "cloc.json").write_text(
+                json.dumps({"SUM": {"code": loc, "nFiles": 1, "blank": 0, "comment": 0}})
+            )
 
         return tmp_path
 
@@ -1770,29 +2169,84 @@ class TestCompareCommand:
         result_dir = self._make_result_dir(tmp_path)
         result = subprocess.run(
             ["uv", "run", "ccbench", "compare", str(result_dir)],
-            capture_output=True, text=True, cwd=CCBENCH_DIR,
+            capture_output=True,
+            text=True,
+            cwd=CCBENCH_DIR,
         )
         assert result.returncode == 0
-        assert "task_baseline" in result.stdout
-        assert "task_variant" in result.stdout
+        assert "Task: task" in result.stdout
+        assert "baseline (n=1)" in result.stdout
+        assert "variant (n=1)" in result.stdout
         assert "$0.0500" in result.stdout
+
+    def test_compare_outputs_separate_table_per_task(self, tmp_path):
+        tasks = tmp_path / "tasks"
+        tasks.mkdir()
+        for name, cost in [
+            ("fair-share_baseline", 0.10),
+            ("fair-share_variant", 0.20),
+            ("debug_baseline", 1.00),
+            ("debug_variant", 1.50),
+        ]:
+            task_dir = tasks / name
+            task_dir.mkdir()
+            (task_dir / "claude_code_metrics.json").write_text(
+                json.dumps(
+                    {
+                        "overall": {
+                            "total_cost_usd": cost,
+                            "duration_ms": 10000,
+                            "num_turns": 4,
+                            "is_error": False,
+                            "usage": {
+                                "input_tokens": 5,
+                                "output_tokens": 100,
+                                "cache_read_input_tokens": 0,
+                            },
+                        }
+                    }
+                )
+            )
+
+        result = subprocess.run(
+            ["uv", "run", "ccbench", "compare", str(tmp_path)],
+            capture_output=True,
+            text=True,
+            cwd=CCBENCH_DIR,
+        )
+
+        assert result.returncode == 0
+        assert "Task: fair-share" in result.stdout
+        assert "Task: debug" in result.stdout
+        assert "baseline (n=1)" in result.stdout
+        assert "variant (n=1)" in result.stdout
+        assert "$0.2000 (+100%)" in result.stdout
+        assert "$1.5000 (+50%)" in result.stdout
 
     def test_compare_json_output(self, tmp_path):
         result_dir = self._make_result_dir(tmp_path)
         result = subprocess.run(
             ["uv", "run", "ccbench", "compare", "--json", str(result_dir)],
-            capture_output=True, text=True, cwd=CCBENCH_DIR,
+            capture_output=True,
+            text=True,
+            cwd=CCBENCH_DIR,
         )
         assert result.returncode == 0
         data = json.loads(result.stdout)
-        assert "variants" in data
-        assert "metrics" in data
-        assert "cost_usd" in data["metrics"]
+        assert data["tasks"]["task"]["variants"] == ["baseline", "variant"]
+        assert data["tasks"]["task"]["metrics"]["cost_usd"] == [0.05, 0.30]
+        assert data["tasks"]["task"]["sample_counts"] == {"baseline": 1, "variant": 1}
+        assert data["tasks"]["task"]["metric_stats"]["cost_usd"] == [
+            {"mean": 0.05, "min": 0.05, "max": 0.05, "count": 1},
+            {"mean": 0.30, "min": 0.30, "max": 0.30, "count": 1},
+        ]
 
     def test_compare_nonexistent_dir(self, tmp_path):
         result = subprocess.run(
             ["uv", "run", "ccbench", "compare", str(tmp_path / "nope")],
-            capture_output=True, text=True, cwd=CCBENCH_DIR,
+            capture_output=True,
+            text=True,
+            cwd=CCBENCH_DIR,
         )
         assert result.returncode != 0
 
@@ -1810,10 +2264,10 @@ class TestCompareCommand:
         from contextlib import redirect_stdout
 
         from ccbench.compare import cmd_compare
+
         buf = io.StringIO()
         with redirect_stdout(buf):
             cmd_compare(json_output=True)
         data = json.loads(buf.getvalue())
         # Should have resolved the most recent dir's task variants
-        assert "variants" in data
-        assert len(data["variants"]) == 2
+        assert data["tasks"]["task"]["variants"] == ["baseline", "variant"]

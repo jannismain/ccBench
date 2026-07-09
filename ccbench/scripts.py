@@ -229,7 +229,7 @@ def ensure_project_git_repo(project_dir: Path) -> None:
             "--allow-empty",
             "--quiet",
             "-m",
-            "before experiment",
+            "ccbench initial state",
         ],
     )
     for command in commands:

@@ -67,8 +67,17 @@ def parse_shard_entry(entry) -> tuple[str, dict]:
         if len(entry) != 1:
             raise ValueError(f"Shard entry dict must have exactly one key, got: {entry}")
         name = next(iter(entry))
+        if not isinstance(name, str):
+            raise TypeError(f"Shard entry name must be a string, got: {type(name)}")
         props = entry[name] or {}
-        return name, {k: str(v) for k, v in props.get("env", {}).items()}
+        if not isinstance(props, dict):
+            raise TypeError(f"Shard entry properties must be a dict, got: {type(props)}")
+        shard_env = props.get("env", {})
+        if shard_env is None:
+            shard_env = {}
+        if not isinstance(shard_env, dict):
+            raise TypeError(f"Shard entry env must be a dict, got: {type(shard_env)}")
+        return name, {k: str(v) for k, v in shard_env.items()}
     raise TypeError(f"Shard entry must be a string or dict, got: {type(entry)}")
 
 
@@ -84,4 +93,3 @@ def apply_shard_env(shard_env: dict, env: dict, task_root_dir: Path, shard_name:
         for key, value in shard_env.items():
             f.write(f"{key}={value}\n")
     return env
-

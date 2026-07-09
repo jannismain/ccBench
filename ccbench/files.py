@@ -130,9 +130,10 @@ def copy_dir(
 
     ignore = None
     if should_skip:
+        skip = should_skip
 
         def ignore(dirpath, names):
-            return [name for name in names if should_skip(Path(dirpath) / name)]
+            return [name for name in names if skip(Path(dirpath) / name)]
 
     shutil.copytree(source, target, dirs_exist_ok=True, ignore=ignore)
 

@@ -1,26 +1,34 @@
-from cyclopts import App
+import sys
+from typing import Annotated
+
+import typer
 from dotenv import load_dotenv
 
 from .compare import cmd_compare
 from .experiment import run_experiment
 from .retry import retry as retry_results
 
+app = typer.Typer(name="ccbench", help="Run and analyze ccBench experiments")
 
+_SUBCOMMANDS = frozenset({"run", "compare", "retry"})
+_ROOT_OPTIONS = frozenset({"--help", "-h", "--install-completion", "--show-completion"})
+
+
+@app.command()
 def run(
-    experiment: str | None = None,
-    *,
-    shard: tuple[str, ...] = (),
-    eval: tuple[str, ...] = (),
-    variant: str | None = None,
-    task: str | None = None,
-    skip_run: bool = False,
-    results_dir: str | None = None,
+    experiment: Annotated[str | None, typer.Argument()] = None,
+    shard: Annotated[list[str] | None, typer.Option("--shard")] = None,
+    eval_: Annotated[list[str] | None, typer.Option("--eval")] = None,
+    variant: Annotated[str | None, typer.Option()] = None,
+    task: Annotated[str | None, typer.Option()] = None,
+    skip_run: Annotated[bool, typer.Option("--skip-run/--no-skip-run")] = False,
+    results_dir: Annotated[str | None, typer.Option()] = None,
 ) -> None:
     """Run an experiment."""
     run_experiment(
         experiment,
-        shards=shard,
-        evals=eval,
+        shards=tuple(shard or []),
+        evals=tuple(eval_ or []),
         variant=variant,
         task=task,
         skip_run=skip_run,
@@ -28,36 +36,35 @@ def run(
     )
 
 
+@app.command()
 def compare(
-    *result_dirs: str,
-    across: bool = False,
-    json: bool = False,
+    result_dirs: Annotated[list[str] | None, typer.Argument()] = None,
+    across: Annotated[bool, typer.Option("--across/--no-across")] = False,
+    json_output: Annotated[bool, typer.Option("--json/--no-json")] = False,
 ) -> None:
     """Compare experiment results."""
-    cmd_compare(list(result_dirs), across=across, json_output=json)
+    cmd_compare(list(result_dirs or []), across=across, json_output=json_output)
 
 
+@app.command()
 def retry(
-    *result_dirs: str,
-    step: tuple[str, ...] = (),
-    task: tuple[str, ...] = (),
+    result_dirs: Annotated[list[str] | None, typer.Argument()] = None,
+    step: Annotated[list[str] | None, typer.Option("--step")] = None,
+    task: Annotated[list[str] | None, typer.Option("--task")] = None,
 ) -> None:
     """Retry failed or selected result steps."""
-    retry_results(list(result_dirs), steps=step, tasks=task)
+    retry_results(list(result_dirs or []), steps=tuple(step or []), tasks=tuple(task or []))
 
 
-def build_app() -> App:
-    app = App(name="ccbench", help="Run and analyze ccBench experiments")
-    app.default(run)
-    app.command(run, name="run", help="Run an experiment")
-    app.command(compare, name="compare", help="Compare experiment results")
-    app.command(retry, name="retry", help="Retry failed or selected result steps")
-    return app
-
-
-app = build_app()
+def _preprocess_tokens(tokens: list[str]) -> list[str]:
+    """Inject 'run' subcommand for legacy default-command invocations."""
+    if not tokens or tokens[0] in _SUBCOMMANDS or tokens[0] in _ROOT_OPTIONS:
+        return tokens
+    return ["run"] + tokens
 
 
 def main(tokens: list[str] | None = None) -> None:
     load_dotenv(".env")
-    app(tokens)
+    if tokens is None:
+        tokens = sys.argv[1:]
+    app(_preprocess_tokens(tokens))

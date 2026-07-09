@@ -68,7 +68,7 @@ The merging follows these rules:
 }
 ```
 
-**Overlay config** (`portkey_for_claude_code/project/.claude/settings.json`):
+**Overlay config** (`requesty_for_claude_code/project/.claude/settings.json`):
 
 ```json
 {
@@ -204,7 +204,7 @@ Example of script ordering with 2 config shards, 1 task, and 2 eval shards:
 
 ```
 setup.000.claude_code.sh     # config[0]
-setup.001.portkey_for_claude_code.sh  # config[1]
+setup.001.requesty_for_claude_code.sh  # config[1]
 setup.002.aoc_2025_01.sh     # task
 setup.003.cloc.sh            # eval[0]
 setup.004.metrics.sh         # eval[1]
@@ -221,7 +221,7 @@ source $VIRTUAL_ENV/bin/activate
 ```
 
 ```bash
-# setup.001.portkey_for_claude_code.sh
+# setup.001.requesty_for_claude_code.sh
 # VIRTUAL_ENV is available here automatically
 pip install requests
 export CLOC_EXTRA_ARGS="--exclude-dir=.venv"

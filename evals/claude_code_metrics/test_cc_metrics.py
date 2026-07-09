@@ -1,12 +1,17 @@
+import importlib.util
 import json
-import sys
 from pathlib import Path
 
-parent_dir = str(Path(__file__).resolve().parent.parent)
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
+module_path = Path(__file__).with_name("cc_metrics.py")
+spec = importlib.util.spec_from_file_location("cc_metrics", module_path)
+assert spec is not None
+cc_metrics = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(cc_metrics)
 
-from cc_metrics import aggregate_model_usage, extract_metrics, extract_skill_usage
+aggregate_model_usage = cc_metrics.aggregate_model_usage
+extract_metrics = cc_metrics.extract_metrics
+extract_skill_usage = cc_metrics.extract_skill_usage
 
 
 def test_aggregate_model_usage_sums_duplicate_models_once():
@@ -32,12 +37,16 @@ def test_extract_metrics_with_multiple_results():
 
 def test_extract_skill_usage_returns_counts(tmp_path):
     claude_json = tmp_path / ".claude.json"
-    claude_json.write_text(json.dumps({
-        "skillUsage": {
-            "simplify": {"usageCount": 3, "lastUsedAt": 1776336502938},
-            "commit": {"usageCount": 1, "lastUsedAt": 1776336000000},
-        }
-    }))
+    claude_json.write_text(
+        json.dumps(
+            {
+                "skillUsage": {
+                    "simplify": {"usageCount": 3, "lastUsedAt": 1776336502938},
+                    "commit": {"usageCount": 1, "lastUsedAt": 1776336000000},
+                }
+            }
+        )
+    )
     result = extract_skill_usage(str(claude_json))
     assert result == {"simplify": 3, "commit": 1}
 

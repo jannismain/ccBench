@@ -6,11 +6,15 @@ This document provides guidelines for developers working on ccBench itself.
 
 ### Running Tests
 
-Run the test suite with pytest:
+Run the local quality gate before handing off changes:
 
 ```bash
-uv run pytest test_ccBench.py -v
+uv run pytest -q
+uv run ruff check .
+uv run ty check
 ```
+
+Pytest discovery is scoped in `pyproject.toml` so benchmark task fixture tests under `tasks/` are not collected as repo tests.
 
 ### Writing Tests
 

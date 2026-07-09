@@ -2,12 +2,12 @@
 # /// script
 # requires-python = ">=3.14"
 # dependencies = [
-#     "cyclopts>=4.10.2",
 #     "pyyaml",
 #     "tomli-w",
 #     "coloredlogs",
 #     "pathspec",
 #     "python-dotenv",
+#     "typer",
 # ]
 # ///
 
