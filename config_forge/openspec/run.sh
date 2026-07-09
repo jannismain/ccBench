@@ -6,22 +6,25 @@ export CLAUDE_CONFIG_DIR="$SCRIPT_DIR/.claude-runtime"
 mkdir -p "$CLAUDE_CONFIG_DIR"
 export CLAUDE=${CLAUDE:-~/.local/bin/claude}
 
-CLAUDE_OPTS="--print --verbose --output-format stream-json --dangerously-skip-permissions --setting-sources project"
+CLAUDE_OPTS="--print --verbose --output-format stream-json --dangerously-skip-permissions --setting-sources project --model sonnet[1m]"
+CLAUDE_OPTS_INTERACTIVE="--dangerously-skip-permissions --setting-sources project --model sonnet[1m]"
 
 PROMPT="$(cat prompt.md)"
 
 cd project
 
-# Step 1: Fast-forward — create proposal, specs, design, and tasks in one pass
-echo "=== OpenSpec Step 1: Fast Forward (create all artifacts) ==="
-$CLAUDE $CLAUDE_OPTS \
-  "Invoke the skill opsx:ff via the Skill tool with the following task requirements: ${PROMPT}" \
-  | tee -a ../output.json
+echo "=== OpenSpec Step 1: Propose (new change) ==="
+$CLAUDE $CLAUDE_OPTS "/opsx:propose ${PROMPT}" | tee -a ../output.json
+git add . && git commit -am "opsx:propose" || echo "No changes to commit"
 
-# Step 2: Apply — implement the tasks from the change
 echo "=== OpenSpec Step 2: Apply (implement tasks) ==="
 $CLAUDE $CLAUDE_OPTS "/opsx:apply" | tee -a ../output.json
+git add . && git commit -am "opsx:apply" || echo "No changes to commit"
 
-# Step 3: Verify — check completeness and correctness
 echo "=== OpenSpec Step 3: Verify ==="
-$CLAUDE $CLAUDE_OPTS "/opsx:verify" | tee -a ../output.json
+$CLAUDE $CLAUDE_OPTS "/opsx:verify fix any major issues" | tee -a ../output.json
+git add . && git commit -am "opsx:verify fix any major issues" || echo "No changes to commit"
+
+echo "=== OpenSpec Step 4: Archive ==="
+$CLAUDE $CLAUDE_OPTS "/opsx:archive" | tee -a ../output.json
+git add . && git commit -am "opsx:archive" || echo "No changes to commit"

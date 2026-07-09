@@ -1,4 +1,536 @@
 {
     "$schema": "https://opencode.ai/config.json",
-    "model": "portkey/@vertex-ai/anthropic.claude-haiku-4-5@20251001"
+    "small_model": "inceptron/minimax-m2.5",
+    "disabled_providers": [
+        "opencode"
+    ],
+    "provider": {
+        "requesty": {
+            "npm": "@ai-sdk/openai-compatible",
+            "options": {
+                "apiKey": "{env:REQUESTY_API_KEY}",
+                "baseURL": "https://router.eu.requesty.ai/v1"
+            },
+            "models": {
+                "inceptron/glm-5.2": {
+                    "name": "inceptron/glm-5.2",
+                    "reasoning": false,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 202752,
+                        "output": 202752
+                    },
+                    "cost": {
+                        "input": 1.2,
+                        "output": 4.2
+                    }
+                },
+                "inceptron/minimax-m2.5": {
+                    "name": "inceptron/minimax-m2.5",
+                    "reasoning": true,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 196608,
+                        "output": 196608
+                    },
+                    "cache": true,
+                    "cost": {
+                        "input": 0.28,
+                        "output": 1.1
+                    }
+                },
+                "inceptron/kimi-k2.6": {
+                    "name": "inceptron/kimi-k2.6",
+                    "reasoning": true,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text",
+                            "image"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 262144,
+                        "output": 262144
+                    },
+                    "cache": true,
+                    "cost": {
+                        "input": 0.7999999999999999,
+                        "output": 3.5
+                    }
+                },
+                "mistral/mistral-medium-latest": {
+                    "name": "mistral/mistral-medium-latest",
+                    "reasoning": false,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 131072,
+                        "output": 0
+                    },
+                    "cost": {
+                        "input": 0.39999999999999997,
+                        "output": 2.0
+                    }
+                },
+                "mistral/mistral-medium-3-5": {
+                    "name": "mistral/mistral-medium-3-5",
+                    "reasoning": true,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text",
+                            "image"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 262144,
+                        "output": 0
+                    },
+                    "cost": {
+                        "input": 1.5,
+                        "output": 7.5
+                    }
+                },
+                "mistral/devstral-latest": {
+                    "name": "mistral/devstral-latest",
+                    "reasoning": false,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 256000,
+                        "output": 0
+                    },
+                    "cost": {
+                        "input": 0.39999999999999997,
+                        "output": 2.0
+                    }
+                },
+                "nebius/zai-org/glm-5.1": {
+                    "name": "nebius/zai-org/glm-5.1",
+                    "reasoning": true,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 200000,
+                        "output": 0
+                    },
+                    "cost": {
+                        "input": 1.4,
+                        "output": 4.4
+                    }
+                },
+                "nebius/moonshotai/kimi-k2.5": {
+                    "name": "nebius/moonshotai/kimi-k2.5",
+                    "reasoning": true,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text",
+                            "image"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 256000,
+                        "output": 128000
+                    },
+                    "cost": {
+                        "input": 0.5,
+                        "output": 2.5
+                    }
+                },
+                "vertex/claude-sonnet-4-6@europe-west1": {
+                    "name": "vertex/claude-sonnet-4-6@europe-west1",
+                    "reasoning": true,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text",
+                            "image"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 1000000,
+                        "output": 128000
+                    },
+                    "cache": true,
+                    "cost": {
+                        "input": 3.0,
+                        "output": 15.0
+                    }
+                },
+                "vertex/gemini-3.1-flash-lite@eu": {
+                    "name": "vertex/gemini-3.1-flash-lite@eu",
+                    "reasoning": false,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text",
+                            "image"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 1048576,
+                        "output": 65535
+                    },
+                    "cache": true,
+                    "cost": {
+                        "input": 0.25,
+                        "output": 1.5
+                    }
+                },
+                "vertex/gemini-2.5-flash@europe-west1": {
+                    "name": "vertex/gemini-2.5-flash@europe-west1",
+                    "reasoning": true,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text",
+                            "image"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 1048576,
+                        "output": 65535
+                    },
+                    "cache": true,
+                    "cost": {
+                        "input": 0.3,
+                        "output": 2.5
+                    }
+                },
+                "vertex/gemini-2.5-pro@europe-west1": {
+                    "name": "vertex/gemini-2.5-pro@europe-west1",
+                    "reasoning": true,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text",
+                            "image"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 1048576,
+                        "output": 65535
+                    },
+                    "cache": true,
+                    "cost": {
+                        "input": 1.25,
+                        "output": 10.0
+                    }
+                },
+                "vertex/claude-opus-4-8@eu": {
+                    "name": "vertex/claude-opus-4-8@eu",
+                    "reasoning": true,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text",
+                            "image"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 1000000,
+                        "output": 128000
+                    },
+                    "cache": true,
+                    "cost": {
+                        "input": 5.5,
+                        "output": 27.5
+                    }
+                },
+                "vertex/claude-opus-4-7@eu": {
+                    "name": "vertex/claude-opus-4-7@eu",
+                    "reasoning": true,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text",
+                            "image"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 1000000,
+                        "output": 128000
+                    },
+                    "cache": true,
+                    "cost": {
+                        "input": 5.5,
+                        "output": 27.5
+                    }
+                },
+                "vertex/claude-haiku-4-5@europe-west1": {
+                    "name": "vertex/claude-haiku-4-5@europe-west1",
+                    "reasoning": false,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text",
+                            "image"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 200000,
+                        "output": 64000
+                    },
+                    "cache": true,
+                    "cost": {
+                        "input": 1.1,
+                        "output": 5.5
+                    }
+                },
+                "bedrock/kimi-k2.5@eu-west-2": {
+                    "name": "bedrock/kimi-k2.5@eu-west-2",
+                    "reasoning": true,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text",
+                            "image"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 128000,
+                        "output": 16000
+                    },
+                    "cache": true,
+                    "cost": {
+                        "input": 0.72,
+                        "output": 3.5999999999999996
+                    }
+                },
+                "bedrock/kimi-k2.5@eu-north-1": {
+                    "name": "bedrock/kimi-k2.5@eu-north-1",
+                    "reasoning": true,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text",
+                            "image"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 128000,
+                        "output": 16000
+                    },
+                    "cache": true,
+                    "cost": {
+                        "input": 0.72,
+                        "output": 3.5999999999999996
+                    }
+                },
+                "azure/openai-responses/gpt-5.4@francecentral": {
+                    "name": "azure/openai-responses/gpt-5.4@francecentral",
+                    "reasoning": true,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text",
+                            "image"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 1050000,
+                        "output": 128000
+                    },
+                    "cache": true,
+                    "cost": {
+                        "input": 2.5,
+                        "output": 15.0
+                    }
+                },
+                "azure/openai-responses/gpt-5.4@swedencentral": {
+                    "name": "azure/openai-responses/gpt-5.4@swedencentral",
+                    "reasoning": true,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text",
+                            "image"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 1050000,
+                        "output": 128000
+                    },
+                    "cache": true,
+                    "cost": {
+                        "input": 2.5,
+                        "output": 15.0
+                    }
+                },
+                "azure/gpt-5.5@swedencentral": {
+                    "name": "azure/gpt-5.5@swedencentral",
+                    "reasoning": true,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text",
+                            "image"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 1050000,
+                        "output": 128000
+                    },
+                    "cache": true,
+                    "cost": {
+                        "input": 5.0,
+                        "output": 30.0
+                    }
+                },
+                "azure/gpt-5.4@francecentral": {
+                    "name": "azure/gpt-5.4@francecentral",
+                    "reasoning": true,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text",
+                            "image"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 1050000,
+                        "output": 128000
+                    },
+                    "cache": true,
+                    "cost": {
+                        "input": 2.5,
+                        "output": 15.0
+                    }
+                },
+                "azure/openai-responses/gpt-5.5@swedencentral": {
+                    "name": "azure/openai-responses/gpt-5.5@swedencentral",
+                    "reasoning": true,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text",
+                            "image"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 1050000,
+                        "output": 128000
+                    },
+                    "cache": true,
+                    "cost": {
+                        "input": 5.0,
+                        "output": 30.0
+                    }
+                },
+                "azure/gpt-5.4@swedencentral": {
+                    "name": "azure/gpt-5.4@swedencentral",
+                    "reasoning": true,
+                    "tool_call": true,
+                    "modalities": {
+                        "input": [
+                            "text",
+                            "image"
+                        ],
+                        "output": [
+                            "text"
+                        ]
+                    },
+                    "limit": {
+                        "context": 1050000,
+                        "output": 128000
+                    },
+                    "cache": true,
+                    "cost": {
+                        "input": 2.5,
+                        "output": 15.0
+                    }
+                }
+            }
+        }
+    }
 }

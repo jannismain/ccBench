@@ -22,6 +22,5 @@ fi
 
 cd project
 $CLAUDE $CLAUDE_LOCAL_SETTINGS_ARG plugins list | tee -a ../claude_code_environment.md
-$CLAUDE $CLAUDE_LOCAL_SETTINGS_ARG agents list | tee -a ../claude_code_environment.md
 $CLAUDE $CLAUDE_LOCAL_SETTINGS_ARG mcp list | tee -a ../claude_code_environment.md
 $CLAUDE $CLAUDE_OPTS "$PROMPT" | tee -a ../output.json
