@@ -10,3 +10,4 @@ results/**/*
 !config_forge/**/*
 config_forge/**/.env
 !tasks/**/*
+tasks/**/.DS_Store
