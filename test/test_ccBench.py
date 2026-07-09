@@ -53,8 +53,10 @@ from ccbench.retry import retry, select_retry_scripts
 from ccbench.scripts import (
     ensure_project_git_repo,
     load_script_statuses,
+    run_script_with_env_capture,
     run_scripts_with_env_propagation,
 )
+from ccbench.secrets import parse_required_secret_keys, preflight_config_secrets
 from ccbench.shards import (
     apply_shard_env,
     parse_shard_entry,
@@ -787,6 +789,26 @@ class TestScriptExecution:
         assert success
         assert final_env.get("FOO") == "bar"
 
+    def test_env_capture_works_with_relative_working_dir(self, tmp_path, monkeypatch):
+        """Env capture writes inside cwd even when working_dir is relative."""
+        work_dir = tmp_path / "results" / "demo" / "tasks" / "task"
+        work_dir.mkdir(parents=True)
+        script = work_dir / "setup.000.relative.sh"
+        script.write_text("#!/bin/bash\nexport RELATIVE_CAPTURE=ok\n")
+
+        monkeypatch.chdir(tmp_path)
+        relative_work_dir = Path("results") / "demo" / "tasks" / "task"
+
+        return_code, final_env = run_script_with_env_capture(
+            relative_work_dir / script.name,
+            relative_work_dir,
+            os.environ.copy(),
+        )
+
+        assert return_code == 0
+        assert final_env["RELATIVE_CAPTURE"] == "ok"
+        assert not (work_dir / "results").exists()
+
     def test_setup_stops_on_failure(self, tmp_path):
         """Setup scripts stop execution on failure."""
         (tmp_path / "setup.000.first.sh").write_text("#!/bin/bash\nexit 1")
@@ -1233,7 +1255,11 @@ class TestEnvPrecedence:
             ["uv", "run", "ccbench", "test_model_override", "--skip-run"],
             capture_output=True,
             text=True,
-            env={**os.environ, "CCBENCH_RESULT": str(tmp_path)},
+            env={
+                **os.environ,
+                "CCBENCH_RESULT": str(tmp_path),
+                "REQUESTY_API_KEY": "test-secret",
+            },
         )
         assert result.returncode == 0, f"Experiment failed: {result.stderr}"
 
@@ -1262,6 +1288,177 @@ class TestEnvPrecedence:
 
         baseline_env = (baseline_dir / ".env").read_text()
         assert "ANTHROPIC_MODEL=haiku" in baseline_env
+
+
+class TestConfigSecrets:
+    """Tests for config-shard secret discovery and preflight resolution."""
+
+    def test_parse_required_secret_keys_from_placeholders_and_refs(self, tmp_path):
+        """Placeholder values and unassigned variable refs declare required secrets."""
+        sample_file = tmp_path / ".env.sample"
+        sample_file.write_text(
+            "\n".join(
+                [
+                    "export API_KEY=sk-...",
+                    "ANTHROPIC_AUTH_TOKEN=${API_KEY}",
+                    "DERIVED_TOKEN=${EXTERNAL_TOKEN}",
+                    "BASE_URL=https://example.com",
+                    "EMPTY_SECRET=",
+                    "COMMENTED=value # not a secret",
+                ]
+            )
+        )
+
+        assert parse_required_secret_keys(sample_file) == [
+            "API_KEY",
+            "EMPTY_SECRET",
+            "EXTERNAL_TOKEN",
+        ]
+
+    def test_preflight_prompts_for_missing_secret_and_saves_it(
+        self, tmp_path, monkeypatch
+    ):
+        """Interactive first usage prompts once and writes the ccBench secret store."""
+        forge_dir = tmp_path / "config_forge"
+        home_dir = tmp_path / "home"
+        shard_dir = forge_dir / "alpha"
+        shard_dir.mkdir(parents=True)
+        (shard_dir / ".env.sample").write_text("ALPHA_API_KEY=sk-...\n")
+
+        monkeypatch.setattr("ccbench.paths.FORGE", forge_dir)
+        monkeypatch.setattr("ccbench.paths.CCBENCH_HOME", home_dir)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("getpass.getpass", lambda _prompt: "secret-value")
+        monkeypatch.setattr("builtins.input", lambda _prompt: "")
+
+        secrets = preflight_config_secrets(
+            {"configs": ["alpha"]},
+            [("", [])],
+            {},
+        )
+
+        assert secrets == {"ALPHA_API_KEY": "secret-value"}
+        secret_file = home_dir / "secrets" / "alpha.env"
+        assert secret_file.exists()
+        assert "export ALPHA_API_KEY=secret-value" in secret_file.read_text()
+        assert secret_file.stat().st_mode & 0o777 == 0o600
+
+    def test_run_experiment_applies_saved_secret_before_staging(
+        self, tmp_path, monkeypatch
+    ):
+        """Resolved secrets are available to config staging before shard copy."""
+        tasks_dir = tmp_path / "tasks"
+        forge_dir = tmp_path / "config_forge"
+        evals_dir = tmp_path / "evals"
+        results_dir = tmp_path / "results"
+        home_dir = tmp_path / "home"
+
+        task_dir = tasks_dir / "demo"
+        task_dir.mkdir(parents=True)
+        (task_dir / "run.sh").write_text("#!/bin/bash\necho task\n")
+
+        shard_dir = forge_dir / "alpha"
+        shard_dir.mkdir(parents=True)
+        (shard_dir / ".env.sample").write_text("ALPHA_API_KEY=sk-...\n")
+        (shard_dir / "staging.sh").write_text(
+            "#!/bin/bash\necho \"$ALPHA_API_KEY\" > staged-secret.txt\n"
+        )
+        (shard_dir / "run.sh").write_text("#!/bin/bash\necho alpha\n")
+
+        secret_dir = home_dir / "secrets"
+        secret_dir.mkdir(parents=True)
+        (secret_dir / "alpha.env").write_text("export ALPHA_API_KEY=saved-secret\n")
+
+        monkeypatch.setattr("ccbench.paths.TASKS", tasks_dir)
+        monkeypatch.setattr("ccbench.paths.FORGE", forge_dir)
+        monkeypatch.setattr("ccbench.paths.EVALS", evals_dir)
+        monkeypatch.setattr("ccbench.paths.RESULTS", results_dir)
+        monkeypatch.setattr("ccbench.paths.CCBENCH_HOME", home_dir)
+
+        experiment_root = run_experiment(
+            shards=("alpha",),
+            task="demo",
+            evals=(),
+            skip_run=True,
+        )
+
+        task_root = experiment_root / "tasks" / "demo"
+        assert (task_root / "staged-secret.txt").read_text().strip() == "saved-secret"
+        task_env = (task_root / ".env").read_text()
+        assert "# === From: ccbench secrets ===" in task_env
+        assert "ALPHA_API_KEY=saved-secret" in task_env
+
+    def test_missing_secret_fails_before_creating_result_root(self, tmp_path, monkeypatch):
+        """Non-interactive runs fail in preflight without partial result directories."""
+        tasks_dir = tmp_path / "tasks"
+        forge_dir = tmp_path / "config_forge"
+        evals_dir = tmp_path / "evals"
+        results_dir = tmp_path / "results"
+        home_dir = tmp_path / "home"
+
+        task_dir = tasks_dir / "demo"
+        task_dir.mkdir(parents=True)
+        (task_dir / "run.sh").write_text("#!/bin/bash\necho task\n")
+
+        shard_dir = forge_dir / "alpha"
+        shard_dir.mkdir(parents=True)
+        (shard_dir / ".env.sample").write_text("ALPHA_API_KEY=sk-...\n")
+
+        monkeypatch.setattr("ccbench.paths.TASKS", tasks_dir)
+        monkeypatch.setattr("ccbench.paths.FORGE", forge_dir)
+        monkeypatch.setattr("ccbench.paths.EVALS", evals_dir)
+        monkeypatch.setattr("ccbench.paths.RESULTS", results_dir)
+        monkeypatch.setattr("ccbench.paths.CCBENCH_HOME", home_dir)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+        with pytest.raises(SystemExit) as excinfo:
+            run_experiment(
+                shards=("alpha",),
+                task="demo",
+                evals=(),
+                skip_run=True,
+            )
+
+        assert "Missing required config shard secrets: alpha:ALPHA_API_KEY" in str(
+            excinfo.value
+        )
+        assert not results_dir.exists()
+
+    def test_variant_env_override_only_satisfies_that_variant(
+        self, tmp_path, monkeypatch
+    ):
+        """A secret override in one variant must not hide another variant's missing secret."""
+        forge_dir = tmp_path / "config_forge"
+        home_dir = tmp_path / "home"
+        shard_dir = forge_dir / "alpha"
+        shard_dir.mkdir(parents=True)
+        (shard_dir / ".env.sample").write_text("ALPHA_API_KEY=sk-...\n")
+
+        monkeypatch.setattr("ccbench.paths.FORGE", forge_dir)
+        monkeypatch.setattr("ccbench.paths.CCBENCH_HOME", home_dir)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+        with pytest.raises(SystemExit) as excinfo:
+            preflight_config_secrets(
+                {
+                    "variants": {
+                        "has_secret": [
+                            {"alpha": {"env": {"ALPHA_API_KEY": "variant-secret"}}}
+                        ],
+                        "missing_secret": ["alpha"],
+                    },
+                },
+                [
+                    (
+                        "has_secret",
+                        [{"alpha": {"env": {"ALPHA_API_KEY": "variant-secret"}}}],
+                    ),
+                    ("missing_secret", ["alpha"]),
+                ],
+                {},
+            )
+
+        assert "alpha:ALPHA_API_KEY" in str(excinfo.value)
 
 
 _runner = CliRunner()

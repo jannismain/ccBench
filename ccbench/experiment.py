@@ -10,6 +10,7 @@ from .compare import cmd_compare
 from .files import copy_task_shard_first
 from .log import log
 from .scripts import ensure_project_git_repo, run_scripts_with_env_propagation
+from .secrets import apply_resolved_secrets, preflight_config_secrets
 from .shards import apply_shard_env, parse_shard_entry, process_shard
 
 
@@ -33,6 +34,14 @@ def run_experiment(
         print("Error: --variant can only be used with experiment files.")
         sys.exit(1)
 
+    selected_tasks = select_tasks(experiment_config, task_filter)
+    selected_variants = select_variants(experiment_config, variant)
+    resolved_secrets = preflight_config_secrets(
+        experiment_config,
+        selected_variants,
+        {key: str(value) for key, value in os.environ.items()},
+    )
+
     experiment_root = create_experiment_root(
         experiment_name,
         results_dir,
@@ -42,8 +51,8 @@ def run_experiment(
     experiment_tasks_root = experiment_root / "tasks"
     experiment_tasks_root.mkdir()
 
-    for task_name in select_tasks(experiment_config, task_filter):
-        for variant_name, variant_configs in select_variants(experiment_config, variant):
+    for task_name in selected_tasks:
+        for variant_name, variant_configs in selected_variants:
             run_task_variant(
                 experiment_config,
                 experiment_name,
@@ -52,6 +61,7 @@ def run_experiment(
                 variant_name,
                 variant_configs,
                 skip_run,
+                resolved_secrets,
             )
 
     if not skip_run:
@@ -191,12 +201,14 @@ def run_task_variant(
     variant_name: str,
     variant_configs: list,
     skip_run: bool,
+    resolved_secrets: dict[str, str],
 ) -> None:
     task_root = create_task_root(experiment_tasks_root, task_name, variant_name)
     project_dir = task_root / "project"
     project_dir.mkdir()
 
     env = os.environ.copy()
+    env = apply_resolved_secrets(env, task_root, resolved_secrets)
     env = apply_experiment_env(experiment_config, experiment_name, task_root, env)
 
     config_shards = experiment_config.get("configs", []) + variant_configs

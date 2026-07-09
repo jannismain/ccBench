@@ -3,6 +3,7 @@ import json
 import os
 import pty
 import select
+import shlex
 import signal
 import struct
 import subprocess
@@ -31,11 +32,11 @@ def run_script_with_env_capture(
     script.chmod(script.stat().st_mode | 0o755)
 
     wrapper = f"""
-source {script.name}
-__exit_code=$?
-env > {env_file}
-exit $__exit_code
-"""
+    source {shlex.quote(script.name)}
+    __exit_code=$?
+    env > {shlex.quote(env_file.name)}
+    exit $__exit_code
+    """
 
     master_fd, slave_fd = pty.openpty()
     winsize = struct.pack("HHHH", 40, 120, 0, 0)
