@@ -8,7 +8,11 @@ from .compare import cmd_compare
 from .experiment import run_experiment
 from .retry import retry as retry_results
 
-app = typer.Typer(name="ccbench", help="Run and analyze ccBench experiments")
+app = typer.Typer(
+    name="ccbench",
+    help="Run and analyze ccBench experiments",
+    no_args_is_help=True,
+)
 
 _SUBCOMMANDS = frozenset({"run", "compare", "retry"})
 _ROOT_OPTIONS = frozenset({"--help", "-h", "--install-completion", "--show-completion"})
