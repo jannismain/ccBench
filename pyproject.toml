@@ -28,8 +28,9 @@ extend-exclude = ["external_references"]
 
 [tool.pytest.ini_options]
 testpaths = [
-    "test/test_ccBench.py",
-    "evals/*"
+    "test",
+    "evals",
+    "config_forge"
 ]
 
 [dependency-groups]
