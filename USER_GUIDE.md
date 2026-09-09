@@ -28,7 +28,7 @@ This keeps the agent workspace clean — only files the agent needs are in `proj
 
 ccBench also ensures `project/` is the git repository the agent sees. If the task already provides a repo in `project/` (for example via `git clone` during staging), ccBench leaves that repo intact. Otherwise it creates an initial commit inside `project/`.
 
-The `cloc` eval uses that repository state to count only files changed in `project/`: tracked files from `git diff HEAD` plus untracked files.
+The `cloc` eval uses that repository state to count only files changed in `project/`: tracked files from `git diff HEAD` plus untracked files. Generated build/cache directories and package-manager lockfiles such as `package-lock.json` are excluded.
 
 ### File Merging
 
@@ -190,14 +190,15 @@ Config shards, task shards, and eval shards can include scripts that run at diff
 | `staging.sh` | Before shard is merged, operates on shard's own files in staging | Stops processing         |
 | `setup.sh`   | After all shards merged, before experiment runs                  | Stops experiment         |
 | `run.sh`     | Executes the main experiment task                                | Continues to next script |
+| `post.sh`    | After all `run.sh` scripts have completed                        | Stops post processing    |
 
 #### How Script Execution Works
 
 1. **Directory assembly is task-first**: the task is copied first, then config shards and eval shards are overlaid onto it
 2. **Script ordering is still config-first**: script indices are assigned in config → task → eval order
 3. **Scripts are renamed during copy**: `run.sh` → `run.{index:03d}.{shard_name}.sh` (zero-padded 3-digit index)
-4. **Scripts execute in alphabetical order** (which preserves the script index order)
-5. **Environment variables propagate** between all scripts - `staging.sh` → `setup.sh` → `run.sh`
+4. **Scripts execute in alphabetical order within each phase** (which preserves the script index order)
+5. **Environment variables propagate** between all scripts - `staging.sh` → `setup.sh` → `run.sh` → `post.sh`
 6. **Output is captured**: Each script's output is streamed to the terminal and saved to a `.log` file
 
 Example of script ordering with 2 config shards, 1 task, and 2 eval shards:
@@ -285,12 +286,28 @@ cd project
 claude --print --output-format stream-json --verbose "$(cat ../prompt.md)" | tee -a ../output.json
 ```
 
+#### post.sh - Post-run Hook
+
+Use `post.sh` when a shard needs cleanup or reporting after all `run.*.sh` scripts have completed. Like other script types, multiple `post.*.sh` scripts run in shard index order.
+
+**Example**:
+
+```bash
+#!/bin/bash
+set -e
+
+echo "Run scripts finished at $(date)" >> post-summary.txt
+```
+
+If any `post.*.sh` script fails (non-zero exit), remaining post scripts are skipped.
+
 #### Best Practices
 
 - **Make scripts idempotent** - Safe to run multiple times
 - **Use `export` for cross-script communication** - Environment propagates automatically
 - **Check for existing state** - Don't reinstall if already present
 - **Exit with proper codes** - 0 for success, non-zero for failure
+- **Use `post.sh` for cleanup/reporting** - It runs after all `run.*.sh` scripts finish
 - **Keep `staging.sh` simple** - Only modify your shard's own files
 
 #### Example: Complete Shard with Multiple Scripts
@@ -300,6 +317,7 @@ config_forge/my_shard/
 ├── staging.sh          # Runs during staging (task root)
 ├── setup.sh            # Installs dependencies (task root)
 ├── run.sh              # Main execution (task root)
+├── post.sh             # Post-run cleanup/reporting (task root)
 └── project/            # Agent workspace files
     └── .claude/
         └── settings.json   # Merged with other shards

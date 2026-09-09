@@ -590,14 +590,17 @@ class TestScriptExecution:
         """Scripts at shard root are renamed and routed to task_root_dir."""
         (temp_shard / "run.sh").write_text("#!/bin/bash\necho hello")
         (temp_shard / "setup.sh").write_text("#!/bin/bash\necho setup")
+        (temp_shard / "post.sh").write_text("#!/bin/bash\necho post")
         (temp_shard / "other.txt").write_text("not a script")
 
         copy_shard_with_script_rename(temp_shard, temp_project, temp_task_root, 0, "my_shard")
 
         assert (temp_task_root / "run.000.my_shard.sh").exists()
         assert (temp_task_root / "setup.000.my_shard.sh").exists()
+        assert (temp_task_root / "post.000.my_shard.sh").exists()
         assert not (temp_task_root / "run.sh").exists()
         assert not (temp_task_root / "setup.sh").exists()
+        assert not (temp_task_root / "post.sh").exists()
         # Non-script files at shard root go to task_root
         assert (temp_task_root / "other.txt").exists()
         # Nothing in project_dir
@@ -843,22 +846,80 @@ class TestScriptExecution:
         assert statuses["run.000.first.sh"]["return_code"] == 1
         assert statuses["run.001.second.sh"]["return_code"] == 0
 
+    def test_post_scripts_run_after_run_scripts(self, tmp_path):
+        """Post scripts are a separate phase after all run scripts."""
+        marker = tmp_path / "order.txt"
+        (tmp_path / "run.000.first.sh").write_text(
+            "#!/bin/bash\necho run-first >> order.txt\nexport RUN_VAR=available"
+        )
+        (tmp_path / "run.001.second.sh").write_text(
+            "#!/bin/bash\necho run-second >> order.txt"
+        )
+        (tmp_path / "post.000.first.sh").write_text(
+            "#!/bin/bash\necho \"post-first:$RUN_VAR\" >> order.txt"
+        )
+        (tmp_path / "post.001.second.sh").write_text(
+            "#!/bin/bash\necho post-second >> order.txt"
+        )
+
+        env = os.environ.copy()
+        run_success, env = run_scripts_with_env_propagation(
+            "run.*.sh", tmp_path, env, stop_on_failure=False
+        )
+        post_success, _ = run_scripts_with_env_propagation(
+            "post.*.sh", tmp_path, env, stop_on_failure=True
+        )
+
+        assert run_success
+        assert post_success
+        assert marker.read_text().splitlines() == [
+            "run-first",
+            "run-second",
+            "post-first:available",
+            "post-second",
+        ]
+
+    def test_post_stops_on_failure(self, tmp_path):
+        """Post scripts stop execution on failure."""
+        (tmp_path / "post.000.first.sh").write_text("#!/bin/bash\nexit 1")
+        (tmp_path / "post.001.second.sh").write_text("#!/bin/bash\necho should not run")
+
+        env = os.environ.copy()
+        success, _ = run_scripts_with_env_propagation(
+            "post.*.sh", tmp_path, env, stop_on_failure=True
+        )
+
+        assert not success
+        assert not (tmp_path / "post.001.second.log").exists()
+        statuses = load_script_statuses(tmp_path)["scripts"]
+        assert statuses["post.000.first.sh"]["return_code"] == 1
+
     def test_shard_ordering(self, tmp_path):
         """Scripts execute in config -> task -> eval order via consecutive indices."""
         # Create scripts simulating: 2 config, 1 task, 1 eval
-        (tmp_path / "run.000.claude_code.sh").write_text("#!/bin/bash\necho config0")
-        (tmp_path / "run.001.tdd_guard.sh").write_text("#!/bin/bash\necho config1")
-        (tmp_path / "run.002.aoc_2025_01.sh").write_text("#!/bin/bash\necho task")
-        (tmp_path / "run.003.cloc.sh").write_text("#!/bin/bash\necho eval")
+        for prefix in ["run", "post"]:
+            (tmp_path / f"{prefix}.000.claude_code.sh").write_text(
+                "#!/bin/bash\necho config0"
+            )
+            (tmp_path / f"{prefix}.001.tdd_guard.sh").write_text(
+                "#!/bin/bash\necho config1"
+            )
+            (tmp_path / f"{prefix}.002.aoc_2025_01.sh").write_text(
+                "#!/bin/bash\necho task"
+            )
+            (tmp_path / f"{prefix}.003.cloc.sh").write_text("#!/bin/bash\necho eval")
 
-        scripts = sorted(tmp_path.glob("run.*.sh"))
-        names = [s.name for s in scripts]
-
-        assert names == [
+        assert [s.name for s in sorted(tmp_path.glob("run.*.sh"))] == [
             "run.000.claude_code.sh",
             "run.001.tdd_guard.sh",
             "run.002.aoc_2025_01.sh",
             "run.003.cloc.sh",
+        ]
+        assert [s.name for s in sorted(tmp_path.glob("post.*.sh"))] == [
+            "post.000.claude_code.sh",
+            "post.001.tdd_guard.sh",
+            "post.002.aoc_2025_01.sh",
+            "post.003.cloc.sh",
         ]
 
     def test_output_captured_to_log(self, tmp_path):
@@ -1679,6 +1740,45 @@ class TestAdHocExperiment:
         assert (task_root / "delta.txt").exists()
         assert (task_root / "gamma.txt").exists()
 
+    def test_post_hook_runs_after_run_phase(self, tmp_path, monkeypatch):
+        tasks_dir = tmp_path / "tasks"
+        forge_dir = tmp_path / "config_forge"
+        evals_dir = tmp_path / "evals"
+        results_dir = tmp_path / "results"
+
+        task_dir = tasks_dir / "demo"
+        task_dir.mkdir(parents=True)
+        (task_dir / "run.sh").write_text("#!/bin/bash\necho task >> order.txt\n")
+
+        shard_dir = forge_dir / "alpha"
+        shard_dir.mkdir(parents=True)
+        (shard_dir / "run.sh").write_text(
+            "#!/bin/bash\necho config-run >> order.txt\nexport CONFIG_RUN_VAR=seen\n"
+        )
+        (shard_dir / "post.sh").write_text(
+            "#!/bin/bash\necho \"config-post:$CONFIG_RUN_VAR\" >> order.txt\n"
+        )
+
+        monkeypatch.setattr("ccbench.paths.TASKS", tasks_dir)
+        monkeypatch.setattr("ccbench.paths.FORGE", forge_dir)
+        monkeypatch.setattr("ccbench.paths.EVALS", evals_dir)
+        monkeypatch.setattr("ccbench.paths.RESULTS", results_dir)
+        monkeypatch.setattr("ccbench.experiment.cmd_compare", lambda *args, **kwargs: None)
+
+        experiment_root = run_experiment(
+            shards=("alpha",),
+            task="demo",
+            evals=(),
+        )
+
+        task_root = experiment_root / "tasks" / "demo"
+        assert (task_root / "post.000.alpha.sh").exists()
+        assert (task_root / "order.txt").read_text().splitlines() == [
+            "config-run",
+            "task",
+            "config-post:seen",
+        ]
+
 
 class TestRetryCommand:
     """Tests for retrying existing result steps."""
@@ -1707,6 +1807,14 @@ class TestRetryCommand:
         second.write_text("#!/bin/bash\n")
 
         assert select_retry_scripts(task_dir, ("run.*.second.sh",)) == [second]
+
+    def test_select_retry_scripts_includes_failed_post_scripts(self, tmp_path):
+        task_dir = self.make_task_result(tmp_path)
+        failing = task_dir / "post.000.cleanup.sh"
+        failing.write_text("#!/bin/bash\nexit 1\n")
+        run_scripts_with_env_propagation("post.*.sh", task_dir, {}, stop_on_failure=True)
+
+        assert select_retry_scripts(task_dir, ()) == [failing]
 
     def test_retry_failed_steps(self, tmp_path):
         task_dir = self.make_task_result(tmp_path)

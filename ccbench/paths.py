@@ -10,7 +10,7 @@ RESULTS = CCBENCH_HOME / "results"
 EVALS = CCBENCH_DIR / "evals"
 
 STAGING_SCRIPT = "staging.sh"
-SCRIPT_NAMES = {STAGING_SCRIPT, "setup.sh", "run.sh"}
+SCRIPT_NAMES = {STAGING_SCRIPT, "setup.sh", "run.sh", "post.sh"}
 
 CCBENCH_IGNORE = ".ccbenchignore"
 DEFAULT_CCBENCH_IGNORE_PATTERNS = ("__pycache__", ".npm")

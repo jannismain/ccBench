@@ -84,7 +84,12 @@ def load_experiment(
         sys.exit(1)
     if experiment:
         experiment_file = resolve_experiment_file(experiment)
-        return experiment_file.stem, load_experiment_config(experiment_file), experiment_file, task
+        return (
+            experiment_file.stem,
+            load_experiment_config(experiment_file),
+            experiment_file,
+            task,
+        )
 
     experiment_config = build_ad_hoc_experiment_config(shards, task, evals)
     return build_ad_hoc_experiment_name(experiment_config), experiment_config, None, None
@@ -221,17 +226,17 @@ def run_task_variant(
 
     ensure_runnable(task_root)
     ensure_project_git_repo(project_dir)
-    if not run_setup_scripts(task_name, task_root, env):
+    setup_success, env = run_setup_scripts(task_name, task_root, env)
+    if not setup_success:
         return
     if skip_run:
         print(f"Prepared task directory at {task_root}, skipping execution.")
         return
-    run_task_scripts(task_name, variant_name, task_root, env)
+    env = run_task_scripts(task_name, variant_name, task_root, env)
+    run_post_scripts(task_name, task_root, env)
 
 
-def create_task_root(
-    experiment_tasks_root: Path, task_name: str, variant_name: str
-) -> Path:
+def create_task_root(experiment_tasks_root: Path, task_name: str, variant_name: str) -> Path:
     task_dir_name = f"{task_name}_{variant_name}" if variant_name else task_name
     task_root = experiment_tasks_root / task_dir_name
     task_root.mkdir()
@@ -313,18 +318,29 @@ def ensure_runnable(task_root: Path) -> None:
         sys.exit(f"No run scripts found in '{task_root}'.")
 
 
-def run_setup_scripts(task_name: str, task_root: Path, env: dict) -> bool:
-    success, _env = run_scripts_with_env_propagation(
+def run_setup_scripts(task_name: str, task_root: Path, env: dict) -> tuple[bool, dict]:
+    success, env = run_scripts_with_env_propagation(
         "setup.*.sh", task_root, env, stop_on_failure=True
     )
     if not success:
         log.error(f"Setup failed for {task_name}")
-    return success
+    return success, env
 
 
 def run_task_scripts(
     task_name: str, variant_name: str, task_root: Path, env: dict
-) -> None:
+) -> dict:
     task_label = f"{task_name} with variant {variant_name}" if variant_name else task_name
     print(f"Running task: {task_label}")
-    run_scripts_with_env_propagation("run.*.sh", task_root, env, stop_on_failure=False)
+    _success, env = run_scripts_with_env_propagation(
+        "run.*.sh", task_root, env, stop_on_failure=False
+    )
+    return env
+
+
+def run_post_scripts(task_name: str, task_root: Path, env: dict) -> None:
+    success, _env = run_scripts_with_env_propagation(
+        "post.*.sh", task_root, env, stop_on_failure=True
+    )
+    if not success:
+        log.error(f"Post scripts failed for {task_name}")

@@ -44,7 +44,7 @@ def retry(
             if return_code != 0:
                 failures += 1
                 log.error(f"Retry step {script.name} failed with code {return_code}")
-                if script.name.startswith("setup."):
+                if script.name.startswith(("setup.", "post.")):
                     break
 
     if retried == 0:
@@ -54,8 +54,10 @@ def retry(
 
 
 def select_retry_scripts(task_dir: Path, steps: tuple[str, ...] | list[str]) -> list[Path]:
-    available_scripts = sorted(task_dir.glob("setup.*.sh")) + sorted(
-        task_dir.glob("run.*.sh")
+    available_scripts = (
+        sorted(task_dir.glob("setup.*.sh"))
+        + sorted(task_dir.glob("run.*.sh"))
+        + sorted(task_dir.glob("post.*.sh"))
     )
     if steps:
         return scripts_matching_steps(available_scripts, steps)
