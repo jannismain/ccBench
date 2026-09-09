@@ -19,13 +19,11 @@ ccBench is a benchmarking suite designed to evaluate the performance of various 
 2. Fill in required secrets.
 
    Some configurations require API keys or other secrets to function properly.
-   For example, if you are using the `requesty_for_claude_code` configuration, you need to set up the `.env` file with your Portkey API key.
-
-    ```bash
-    cd config_forge/requesty_for_claude_code
-    cp .env.sample .env
-    # Edit .env to add your Portkey API key
-    ```
+   The `requesty_for_claude_code` shard reads `REQUESTY_API_KEY` from the macOS
+   1Password CLI (`op`). By default it reads
+   `op://Employee/Requesty/api-key-ccbench`; override that reference with
+   `REQUESTY_API_KEY_OP_REFERENCE` when needed. An existing `REQUESTY_API_KEY`
+   environment variable takes precedence.
 
 ## Development
 
@@ -111,7 +109,7 @@ ccBench includes several evaluation tools to analyze the results of experiments:
 
 ### `cloc` - Code Line Counter
 
-Counts the lines of code in files changed by the agent inside `project/`, based on git diff plus untracked files. This includes both newly created files and modifications to existing tracked files.
+Counts the lines of code in files changed by the agent inside `project/`, based on git diff plus untracked files. This includes both newly created files and modifications to existing tracked files. Generated build/cache directories and package-manager lockfiles such as `package-lock.json` are excluded.
 
 **Output:** `cloc.json` - Contains line counts by language and file type.
 
