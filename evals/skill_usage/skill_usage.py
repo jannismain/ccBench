@@ -40,17 +40,15 @@ def count_usage(uses: list[dict], skill: str) -> dict:
     }
 
 
-COMPARE_METRICS_FILE = Path("metrics/skill_usage.json")
-
-
-def write_compare_metrics(result: dict) -> None:
+def write_compare_metrics(result: dict, task_root: Path) -> None:
     """Contribute metrics to `ccbench compare`; None values render as missing."""
     metrics = {
         "used": {"value": result.get("used"), "label": "Skill used", "format": "{:.0%}"},
         "invocations": {"value": result.get("invocations"), "label": "Skill invocations", "format": "{:.1f}"},
     }
-    COMPARE_METRICS_FILE.parent.mkdir(exist_ok=True)
-    COMPARE_METRICS_FILE.write_text(json.dumps({"eval": "skill_usage", "metrics": metrics}, indent=2))
+    compare_metrics_file = task_root / "metrics" / "skill_usage.json"
+    compare_metrics_file.parent.mkdir(exist_ok=True)
+    compare_metrics_file.write_text(json.dumps({"eval": "skill_usage", "metrics": metrics}, indent=2))
 
 
 def main(output_file: Path, metrics_file: Path, skill: str) -> int:
@@ -59,7 +57,7 @@ def main(output_file: Path, metrics_file: Path, skill: str) -> int:
     else:
         result = {"status": "completed", **count_usage(tool_uses(output_file), skill)}
     metrics_file.write_text(json.dumps(result, indent=2) + "\n")
-    write_compare_metrics(result)
+    write_compare_metrics(result, metrics_file.parent)
     print(json.dumps(result, indent=2))
     return 0
 

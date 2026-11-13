@@ -141,10 +141,7 @@ def aggregate(answers: list[str]) -> dict:
     }
 
 
-COMPARE_METRICS_FILE = Path("metrics/readability.json")
-
-
-def write_compare_metrics(result: dict) -> None:
+def write_compare_metrics(result: dict, task_root: Path) -> None:
     """Contribute metrics to `ccbench compare`; None values render as missing."""
     words_per_answer = ((result.get("stats") or {}).get("words") or {}).get("mean")
     displayed = [
@@ -163,8 +160,9 @@ def write_compare_metrics(result: dict) -> None:
         for key, value, label, fmt in displayed
     }
     metrics["words"]["change"] = "percent"
-    COMPARE_METRICS_FILE.parent.mkdir(exist_ok=True)
-    COMPARE_METRICS_FILE.write_text(json.dumps({"eval": "readability", "metrics": metrics}, indent=2))
+    compare_metrics_file = task_root / "metrics" / "readability.json"
+    compare_metrics_file.parent.mkdir(exist_ok=True)
+    compare_metrics_file.write_text(json.dumps({"eval": "readability", "metrics": metrics}, indent=2))
 
 
 def main(output_file: Path, metrics_file: Path) -> int:
@@ -173,7 +171,7 @@ def main(output_file: Path, metrics_file: Path) -> int:
     else:
         result = {"status": "completed", **aggregate(final_answers(output_file))}
     metrics_file.write_text(json.dumps(result, indent=2) + "\n")
-    write_compare_metrics(result)
+    write_compare_metrics(result, metrics_file.parent)
     print(json.dumps(result, indent=2))
     return 0
 
