@@ -7,6 +7,7 @@ from dotenv import dotenv_values
 
 from .compare import most_recent_result_dir, resolve_task_dirs
 from .log import log
+from .provenance import archive_before_retry
 from .scripts import load_script_statuses, run_script_with_env_capture
 
 
@@ -37,6 +38,7 @@ def retry(
             continue
         print(f"Retrying {label}:")
         env = retry_env(task_dir)
+        archive_before_retry(task_dir)
         for script in scripts:
             print(f"  {script.name}")
             return_code, env = run_script_with_env_capture(script, task_dir, env)
@@ -108,4 +110,3 @@ def retry_env(task_dir: Path) -> dict:
             if value is not None:
                 env[key] = value
     return env
-

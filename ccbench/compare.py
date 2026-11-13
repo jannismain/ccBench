@@ -474,6 +474,10 @@ def metric_stats_by_key(metric_stats: list[dict]) -> dict[str, list[dict | None]
 
 def build_task_results(task_entries: list[tuple[str, Path]]) -> dict[str, dict]:
     records = build_compare_records(task_entries)
+    return aggregate_records(records)
+
+
+def aggregate_records(records: list[CompareRecord]) -> dict[str, dict]:
     grouped: dict[str, dict[str, list[dict]]] = {}
     for record in records:
         grouped.setdefault(record.task, {}).setdefault(record.variant, []).append(
@@ -509,15 +513,29 @@ def reference_indices_for_variants(variants: list[str]) -> list[int | None]:
 
 
 def build_compare_records(task_entries: list[tuple[str, Path]]) -> list[CompareRecord]:
+    from .provenance import digest, load_manifest
+
     contexts = task_variant_contexts(task_entries)
-    return [
-        CompareRecord(
-            task=context[0],
-            variant=context[1],
-            metrics=extract_metrics_summary(path),
-        )
-        for context, (_label, path) in zip(contexts, task_entries, strict=True)
-    ]
+    collected = []
+    seen = set()
+    identities: dict[tuple[str, str], set[str]] = {}
+    for context, (_label, path) in zip(contexts, task_entries, strict=True):
+        manifest = load_manifest(path)
+        run_id = manifest.get("run_id")
+        if run_id and run_id in seen:
+            continue
+        if run_id:
+            seen.add(run_id)
+        identity = digest({key: manifest.get(key) for key in (
+            "recipe", "task_source", "prepared", "runtime", "runtime_config", "observed_models", "evals", "host", "harness",
+        )}) if manifest else "legacy"
+        identities.setdefault(context, set()).add(identity)
+        collected.append((context, path, identity, manifest))
+    return [CompareRecord(
+        task=context[0],
+        variant=context[1] + (f"@{identity[:8]}" if len(identities[context]) > 1 else ""),
+        metrics=manifest.get("metrics", extract_metrics_summary(path)),
+    ) for context, path, identity, manifest in collected]
 
 
 def task_variant_contexts(task_entries: list[tuple[str, Path]]) -> list[tuple[str, str]]:
@@ -624,6 +642,13 @@ def experiment_task_variant_context(path: Path) -> tuple[Path, str, str] | None:
 
     experiment_root = path.parent.parent
     config = load_experiment_config_for_result(experiment_root)
+    metadata = load_task_metadata(path)
+    if metadata is not None:
+        task_name, variant_name = metadata
+        return (
+            experiment_root.resolve(), task_name,
+            variant_name or implicit_variant_name(config),
+        )
     if not config:
         return None
 
@@ -643,6 +668,20 @@ def experiment_task_variant_context(path: Path) -> tuple[Path, str, str] | None:
         for variant_name in variants:
             if dirname == f"{task_name}_{variant_name}":
                 return experiment_root.resolve(), str(task_name), str(variant_name)
+    return None
+
+
+def load_task_metadata(path: Path) -> tuple[str, str] | None:
+    metadata_file = path / ".ccbench-task.json"
+    if metadata_file.exists():
+        try:
+            metadata = json.loads(metadata_file.read_text())
+            task_name = metadata["task"]
+            variant_name = metadata["variant"]
+            if isinstance(task_name, str) and isinstance(variant_name, str):
+                return task_name, variant_name
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            log.warning(f"Failed to parse task metadata {metadata_file}: {exc}")
     return None
 
 

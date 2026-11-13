@@ -50,6 +50,8 @@ uv run ccbench [experiment.yaml]
 - `experiment` - Experiment YAML file. You can pass a direct path, or just the file name relative to `experiments/`
 - `--variant NAME` - Run only the specified variant from the experiment
 - `--task NAME` - Run only the specified task from the experiment
+- `-n INT`, `--runs INT` - Repeat every selected task/variant in parallel; overrides YAML `runs` (default: `1`)
+- New results include provenance manifests. Use `results find`, `results diff`, and `compare --baseline-history --policy comparison.yaml` to inspect and reuse compatible historical baselines; see [the user guide](USER_GUIDE.md#finding-reusable-historical-baselines).
 - `--skip-run` - Prepare experiment directories and run setup scripts, but skip task execution
 - `--results-dir PATH` - Write results under the given directory instead of using `$CCBENCH_RESULT` or `~/.ccbench/results`
 

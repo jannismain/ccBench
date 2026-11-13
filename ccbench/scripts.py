@@ -9,6 +9,7 @@ import struct
 import subprocess
 import sys
 import termios
+import threading
 import tty
 from datetime import datetime
 from pathlib import Path
@@ -42,7 +43,8 @@ def run_script_with_env_capture(
     winsize = struct.pack("HHHH", 40, 120, 0, 0)
     fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
 
-    stdin_is_tty = sys.stdin.isatty()
+    interactive = threading.current_thread() is threading.main_thread()
+    stdin_is_tty = interactive and sys.stdin.isatty()
     old_settings = None
 
     try:
@@ -55,7 +57,7 @@ def run_script_with_env_capture(
             ["bash", "-c", wrapper],
             cwd=working_dir,
             env=env,
-            stdin=slave_fd,
+            stdin=slave_fd if interactive else subprocess.DEVNULL,
             stdout=slave_fd,
             stderr=slave_fd,
         )

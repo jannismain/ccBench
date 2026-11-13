@@ -349,11 +349,158 @@ my-tool analyze .
 
 ## Creating Experiments
 
+### Finding reusable historical baselines
+
+New runs automatically write `.ccbench/manifest.json` inside each task result.
+This records a permanent run ID, the ordered shard recipes (including unselected
+variants), task inputs, staging outputs, prepared files, tool versions, tracked
+environment settings, evaluator identities, execution status, and metrics.
+Files are identified by SHA-256 content hashes and executable permissions.
+Relevant input and final project files are retained in `.ccbench/objects/`,
+deduplicated within each run, for later inspection without consulting today's shards.
+
+Keep a baseline variant declared in your experiment, but run only the new variant:
+
+```bash
+uv run ccbench experiment.yaml --variant new_variant -n 5
+```
+
+For one resulting task directory, find historical candidates and their reasons:
+
+```bash
+uv run ccbench results find --for /path/to/tasks/demo_new_variant_run_1 \
+  --history-dir /path/to/results --policy comparison.yaml
+uv run ccbench results diff OLD_RUN_ID NEW_RUN_ID --history-dir /path/to/results
+```
+
+`find` and `diff` emit JSON. They accept a task-result path or permanent run ID;
+`find` also accepts an experiment directory containing exactly one task result.
+Discovery is read-only and scans portable manifests directly. Copies of the same
+run are counted once. There is no database to migrate or rebuild.
+
+To compare all newly generated repetitions against eligible historical baselines:
+
+```bash
+uv run ccbench compare /path/to/new-experiment-result --baseline-history \
+  --baseline baseline --history-dir /path/to/results \
+  --policy comparison.yaml --report /path/to/comparison-report.json
+```
+
+The history directory defaults to `CCBENCH_RESULT`, then `~/.ccbench/results`.
+All qualifying samples are used. When several current repetitions are selected,
+the historical baseline must qualify for every repetition in that task cohort.
+Candidates must match the reference experiment's
+declared baseline recipe, including shard contents, order, and overrides.
+Task inputs and evaluator recipes must match. Differences contributed by the
+declared variant shards are reported as intended experimental changes. Other
+prepared-file changes are rejected unless explicitly permitted. Files changed
+indirectly by setup may require a path rule because their ownership is unknown.
+
+Example `comparison.yaml`:
+
+```yaml
+tools:
+  claude_code:
+    min: "2.1.262"
+    max_exclusive: "2.2.0"
+  specify:
+    min: "4.4.6"
+    max_exclusive: "5.0.0"
+max_age_days: 90
+```
+
+These are example bounds, not claims about tool compatibility. Omit `specify`
+when it is not part of the baseline. A tool rule requires that tool to be observed
+in the candidate. Without a rule, shared tools require identical observed versions.
+Rules can alternatively use `versions: ["2.1.262", "2.1.266"]`, which also supports
+exact prerelease/build strings. Numeric bounds require `major.minor.patch`.
+Both observed versions must satisfy the rule. If a baseline-only tool is absent
+from the new variant, a tool rule supplies the required version constraint.
+
+Additional optional policy fields:
+
+```yaml
+# Explicitly accept these generated file differences; globs match relative paths.
+staged_paths:
+  speckit: ["project/.specify/**"]
+prepared_paths: ["project/.specify/**"]
+# Changes under the separate starting runtime configuration snapshot.
+runtime_paths: ["plugins/**"]
+# Exact by default; relax only the fields relevant to your comparison.
+ignore_fields: ["host.python", "harness.revision", "harness.source"]
+# Default is [completed]. Nonzero scripts require explicit inclusion.
+states: [completed, completed_with_errors]
+```
+
+A version exception never automatically waives a file difference. Unknown policy
+keys and invalid ranges are errors. Reports preserve the full policy, run IDs,
+manifests, metrics, and accepted/rejected differences. Report files are never
+overwritten. If `--report` is omitted, the report is saved under
+`<history-dir>/comparisons/`. `--json` emits the full report as well.
+
+Ordinary `compare` separates runs with the same variant label but different
+recorded identities using an `@fingerprint` suffix. Explicit historical comparison
+can pool policy-compatible identities and labels the selected historical samples
+with the requested baseline name.
+
+### Tool metadata and collection limits
+
+A config shard can declare bounded version probes and additional environment
+variables in `metadata.yaml`:
+
+```yaml
+tools:
+  my_agent:
+    command: ["${MY_AGENT_BIN}", "--version"]
+env: [MY_AGENT_MODEL, MY_AGENT_TEMPERATURE]
+```
+
+Commands are argument lists, with environment-variable substitution and a
+five-second timeout. There is no implicit shell or package installation. The first
+three-part version in successful output is recorded; unsuccessful probes record
+an unknown version. Declarations are read from the captured shard snapshot.
+Claude Code has a built-in adapter respecting `CLAUDE`/`CLAUDE_BIN`; the Claude
+Code and SpecKit run scripts also record a version observation at run-script entry.
+SpecKit records its staging version probe. Its moving Git source is **not pinned**
+by this feature; generated snapshots provide additional evidence. Versions are
+probed again after execution, and detected drift blocks historical matching.
+
+Declared non-secret overrides and a built-in model/provider environment allowlist
+are captured. Non-secret `.env` assignments are captured separately without the
+raw file. Known secret values, sensitive filenames, and detected credential-bearing
+files are excluded from file objects. `.git`, dependency/cache directories, logs,
+and shard ignore rules are also excluded; exclusions are recorded. Symlinks are
+recorded without following their targets. Local `.claude-runtime` configuration
+gets a separate starting snapshot. Observed model identifiers are extracted from
+Claude result events when available. External service state and arbitrary global
+configuration cannot be reconstructed from this metadata.
+
+Execution dates, local parallel-job count, OS release, and CPU count are recorded
+for inspection; these descriptive fields do not automatically prevent pooling.
+Inspect them when comparing duration or cost. Model, host platform/architecture,
+Python version, harness code, and evaluator differences are strict by default.
+
+Prepared-only, interrupted, setup-failed, unknown-schema, and legacy results do
+not qualify for automatic historical matching. Existing results are never assigned
+today's versions. You can still explicitly compare legacy result paths using the
+ordinary `compare` command, without claiming verified compatibility.
+
+Retrying a recorded run archives its manifest, logs, and JSON outputs under
+`.ccbench/attempts/` and marks the mutable result `retried`, excluding it from
+automatic reuse. A retry is not counted as a fresh independent sample. A valid
+benchmark failure represented by a zero-exit evaluation and a failing score still
+counts; infrastructure/nonzero-script outcomes are separately identified.
+
+Automatic skipping of baseline execution and filling missing sample counts are
+not implemented. `-n` continues to request new executions.
+
 ### Experiment File Structure
 
 An experiment is defined in a YAML file in the `experiments/` directory:
 
 ```yaml
+runs: 3  # Optional; defaults to 1, overridden by -n / --runs
+
 tasks:
   - aoc_2025_01
 

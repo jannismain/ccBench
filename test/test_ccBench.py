@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import threading
 import tomllib
 from pathlib import Path
 from unittest.mock import patch
@@ -1525,8 +1526,164 @@ class TestConfigSecrets:
 _runner = CliRunner()
 
 
+class TestParallelExperiments:
+    @pytest.mark.parametrize("runs", [None, 2])
+    def test_ad_hoc_runs_without_variants(self, tmp_path, monkeypatch, runs):
+        """Default runs keep the old layout; repeats also work without variants."""
+        task = tmp_path / "tasks" / "demo"
+        task.mkdir(parents=True)
+        (task / "run.sh").write_text("echo done\n")
+        shard = tmp_path / "forge" / "plain"
+        shard.mkdir(parents=True)
+        monkeypatch.setattr("ccbench.paths.TASKS", task.parent)
+        monkeypatch.setattr("ccbench.paths.FORGE", shard.parent)
+        monkeypatch.setattr("ccbench.paths.EVALS", tmp_path / "evals")
+        root = run_experiment(
+            shards=["plain"], task="demo", runs=runs, skip_run=True,
+            results_dir=str(tmp_path / "results"),
+        )
+        expected = {"demo"} if runs is None else {"demo_run_1", "demo_run_2"}
+        assert {path.name for path in (root / "tasks").iterdir()} == expected
+        grouped = build_task_results(resolve_task_dirs([str(root)], across=False))
+        assert grouped["demo"]["sample_counts"] == {"plain": runs or 1}
+
+    def test_worker_exception_propagates_after_other_jobs_finish(
+        self, tmp_path, monkeypatch, experiment_file
+    ):
+        """A failed worker cannot silently report a successful experiment."""
+        barrier = threading.Barrier(8, timeout=10)
+        completed = []
+
+        def run_job(*args):
+            barrier.wait()
+            if (args[3], args[4], args[8]) == ("one", "baseline", 1):
+                raise RuntimeError("staging failed")
+            completed.append(args[3])
+
+        monkeypatch.setattr("ccbench.experiment.run_task_variant", run_job)
+        with pytest.raises(RuntimeError, match="staging failed"):
+            run_experiment(
+                str(experiment_file), skip_run=True,
+                results_dir=str(tmp_path / "results"),
+            )
+        assert len(completed) == 7
+
+    @pytest.fixture
+    def experiment_file(self, tmp_path):
+        """Create a local experiment without external services."""
+        path = tmp_path / "parallel.yaml"
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    "tasks": ["one", "two"],
+                    "variants": {"baseline": [], "other": []},
+                    "runs": 2,
+                }
+            )
+        )
+        return path
+
+    def test_all_combinations_start_concurrently(
+        self, tmp_path, monkeypatch, experiment_file
+    ):
+        """Every task, variant, and repeat starts before any job finishes."""
+        barrier = threading.Barrier(8, timeout=10)
+        calls = []
+
+        def run_job(*args):
+            calls.append((args[3], args[4], args[8]))
+            barrier.wait()
+
+        monkeypatch.setattr("ccbench.experiment.run_task_variant", run_job)
+        run_experiment(
+            str(experiment_file), skip_run=True, results_dir=str(tmp_path / "results")
+        )
+        assert set(calls) == {
+            (task, variant, run)
+            for task in ["one", "two"]
+            for variant in ["baseline", "other"]
+            for run in [1, 2]
+        }
+
+    @pytest.mark.parametrize("value", [0, -1, True, 1.5, "2", None])
+    def test_invalid_config_runs_rejected_before_output(self, tmp_path, value):
+        """Run counts must be positive integers, including in YAML."""
+        config = tmp_path / "invalid.yaml"
+        config.write_text(yaml.safe_dump({"runs": value}))
+        output = tmp_path / "results"
+        with pytest.raises(SystemExit, match="positive integer"):
+            run_experiment(str(config), results_dir=str(output))
+        assert not output.exists()
+
+    @pytest.mark.parametrize("args, count", [([], 2), (["-n", "3"], 3), (["--runs", "1"], 1)])
+    def test_cli_repeats_isolate_and_group_results(
+        self, tmp_path, monkeypatch, experiment_file, args, count
+    ):
+        """Real scripts preserve phase order and env in each independent workspace."""
+        task_dir = tmp_path / "tasks" / "one"
+        task_dir.mkdir(parents=True)
+        (task_dir / "setup.sh").write_text("export PHASE=setup\necho setup > order.txt\n")
+        (task_dir / "run.sh").write_text('echo "$PHASE-run" >> order.txt\nexport PHASE=run\n')
+        (task_dir / "post.sh").write_text(
+            'echo "$PHASE-post" >> order.txt\necho \'{"score": 1}\' > exact_answer.json\n'
+        )
+        monkeypatch.setattr("ccbench.paths.TASKS", tmp_path / "tasks")
+        output = tmp_path / "results"
+        result = _runner.invoke(
+            app,
+            [
+                "run",
+                str(experiment_file),
+                "--task",
+                "one",
+                "--results-dir",
+                str(output),
+                *args,
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        (root,) = output.iterdir()
+        entries = resolve_task_dirs([str(root)], across=False)
+        assert len(entries) == count * 2
+        for _, path in entries:
+            assert (path / "order.txt").read_text().splitlines() == [
+                "setup",
+                "setup-run",
+                "run-post",
+            ]
+            assert len(load_script_statuses(path)["scripts"]) == 3
+        grouped = build_task_results(entries)
+        assert grouped["one"]["sample_counts"] == {"baseline": count, "other": count}
+        assert yaml.safe_load((root / experiment_file.name).read_text())["runs"] == count
+
+    @pytest.mark.parametrize("value", ["0", "-1", "abc"])
+    def test_cli_rejects_invalid_count(self, value):
+        """Invalid CLI counts fail during parsing."""
+        with patch("ccbench.cli.run_experiment") as run:
+            result = _runner.invoke(app, ["run", "simple", "-n", value])
+        assert result.exit_code != 0
+        run.assert_not_called()
+
+
 class TestBuildApp:
     """Tests for Typer CLI argument parsing with subcommands."""
+
+    def test_no_arguments_displays_help(self):
+        """Invoking ccbench without arguments displays the root help dialog."""
+        result = _runner.invoke(app, [])
+
+        assert "Usage:" in result.output
+        assert "Run and analyze ccBench experiments" in result.output
+        assert "Commands" in result.output
+
+    def test_results_without_command_displays_help(self):
+        """Invoking results without a command displays its usage dialog."""
+        result = _runner.invoke(app, ["results"])
+
+        assert "Usage:" in result.output
+        assert "Find and inspect recorded run provenance." in result.output
+        assert "Commands" in result.output
+        assert "Missing command" not in result.output
 
     def test_old_style_invocation_maps_to_run(self):
         """Passing experiment name directly is preprocessed to the run subcommand."""
@@ -1552,6 +1709,7 @@ class TestBuildApp:
                 task=None,
                 skip_run=False,
                 results_dir=None,
+                runs=None,
             )
 
     def test_ad_hoc_run_subcommand(self):
@@ -1581,6 +1739,7 @@ class TestBuildApp:
                 task="aoc_2025_10",
                 skip_run=False,
                 results_dir=None,
+                runs=None,
             )
 
     def test_compare_parses_result_dirs(self):

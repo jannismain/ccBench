@@ -1,6 +1,9 @@
+import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 
 import yaml
@@ -9,6 +12,14 @@ from . import paths
 from .compare import cmd_compare
 from .files import copy_task_shard_first
 from .log import log
+from .provenance import (
+    finish_manifest,
+    initialize_manifest,
+    load_manifest,
+    record_prepared,
+    record_task_inputs,
+    write_manifest,
+)
 from .scripts import ensure_project_git_repo, run_scripts_with_env_propagation
 from .secrets import apply_resolved_secrets, preflight_config_secrets
 from .shards import apply_shard_env, parse_shard_entry, process_shard
@@ -23,6 +34,7 @@ def run_experiment(
     task: str | None = None,
     skip_run: bool = False,
     results_dir: str | None = None,
+    runs: int | None = None,
 ) -> Path:
     experiment_name, experiment_config, experiment_file, task_filter = load_experiment(
         experiment,
@@ -30,6 +42,11 @@ def run_experiment(
         evals,
         task,
     )
+    run_count = experiment_config.get("runs", 1) if runs is None else runs
+    if type(run_count) is not int or run_count < 1:
+        sys.exit("Error: runs must be a positive integer.")
+    if runs is not None:
+        experiment_config = {**experiment_config, "runs": runs}
     if variant and experiment_file is None:
         print("Error: --variant can only be used with experiment files.")
         sys.exit(1)
@@ -51,18 +68,32 @@ def run_experiment(
     experiment_tasks_root = experiment_root / "tasks"
     experiment_tasks_root.mkdir()
 
-    for task_name in selected_tasks:
-        for variant_name, variant_configs in selected_variants:
-            run_task_variant(
-                experiment_config,
-                experiment_name,
-                experiment_tasks_root,
-                task_name,
-                variant_name,
-                variant_configs,
-                skip_run,
-                resolved_secrets,
-            )
+    jobs = [
+        partial(
+            run_task_variant,
+            experiment_config,
+            experiment_name,
+            experiment_tasks_root,
+            task_name,
+            variant_name,
+            variant_configs,
+            skip_run,
+            resolved_secrets,
+            run_index if run_count > 1 else None,
+            run_count * len(selected_tasks) * len(selected_variants),
+        )
+        for run_index in range(1, run_count + 1)
+        for task_name in selected_tasks
+        for variant_name, variant_configs in selected_variants
+    ]
+    if len(jobs) == 1:
+        jobs[0]()
+    else:
+        log.info(f"Running {len(jobs)} task/variant/run combinations in parallel")
+        with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+            futures = [executor.submit(job) for job in jobs]
+            for future in futures:
+                future.result()
 
     if not skip_run:
         print()
@@ -151,15 +182,13 @@ def create_experiment_root(
     experiment_file: Path | None = None,
 ) -> Path:
     result_base = Path(results_dir or os.getenv("CCBENCH_RESULT") or paths.RESULTS)
-    timestamp = datetime.now().isoformat(sep="_", timespec="seconds")
+    timestamp = datetime.now().isoformat(sep="_", timespec="microseconds")
     timestamp = timestamp.replace(":", "").replace("-", "")
     experiment_root = result_base / f"{timestamp}_{experiment_name}"
-    experiment_root.mkdir(parents=True, exist_ok=True)
-    if experiment_file:
-        experiment_file.copy_into(experiment_root)
-    else:
-        experiment_yaml = experiment_root / f"{experiment_name}.yaml"
-        experiment_yaml.write_text(yaml.safe_dump(experiment_config, sort_keys=False))
+    experiment_root.mkdir(parents=True)
+    filename = experiment_file.name if experiment_file else f"{experiment_name}.yaml"
+    experiment_yaml = experiment_root / filename
+    experiment_yaml.write_text(yaml.safe_dump(experiment_config, sort_keys=False))
     return experiment_root
 
 
@@ -207,18 +236,61 @@ def run_task_variant(
     variant_configs: list,
     skip_run: bool,
     resolved_secrets: dict[str, str],
+    run_index: int | None = None,
+    parallel_jobs: int = 1,
 ) -> None:
-    task_root = create_task_root(experiment_tasks_root, task_name, variant_name)
+    task_root = create_task_root(experiment_tasks_root, task_name, variant_name, run_index)
+    (task_root / ".ccbench-task.json").write_text(
+        json.dumps(
+            {
+                "task": task_name,
+                "variant": variant_name,
+                "run": run_index or 1,
+            }
+        )
+    )
     project_dir = task_root / "project"
     project_dir.mkdir()
 
     env = os.environ.copy()
     env = apply_resolved_secrets(env, task_root, resolved_secrets)
     env = apply_experiment_env(experiment_config, experiment_name, task_root, env)
+    initialize_manifest(
+        task_root, experiment_config, task_name, variant_name, env, parallel_jobs
+    )
+    try:
+        execute_task_variant(
+            experiment_config,
+            task_name,
+            variant_name,
+            variant_configs,
+            task_root,
+            project_dir,
+            env,
+            skip_run,
+        )
+    except BaseException:
+        manifest = load_manifest(task_root)
+        manifest["state"] = "interrupted_or_failed"
+        write_manifest(task_root, manifest)
+        raise
+
+
+def execute_task_variant(
+    experiment_config: dict,
+    task_name: str,
+    variant_name: str,
+    variant_configs: list,
+    task_root: Path,
+    project_dir: Path,
+    env: dict,
+    skip_run: bool,
+) -> None:
 
     config_shards = experiment_config.get("configs", []) + variant_configs
     task_index = len(config_shards)
     env = assemble_task(task_name, task_root, project_dir, task_index, env)
+    record_task_inputs(task_root, env)
     env = apply_config_shards(config_shards, task_root, project_dir, env)
     env = apply_eval_shards(
         experiment_config.get("evals", []), task_index, task_root, project_dir, env
@@ -228,16 +300,26 @@ def run_task_variant(
     ensure_project_git_repo(project_dir)
     setup_success, env = run_setup_scripts(task_name, task_root, env)
     if not setup_success:
+        finish_manifest(task_root, "setup_failed", env)
         return
+    record_prepared(task_root, env)
     if skip_run:
         print(f"Prepared task directory at {task_root}, skipping execution.")
         return
     env = run_task_scripts(task_name, variant_name, task_root, env)
     run_post_scripts(task_name, task_root, env)
+    finish_manifest(task_root, "completed", env)
 
 
-def create_task_root(experiment_tasks_root: Path, task_name: str, variant_name: str) -> Path:
+def create_task_root(
+    experiment_tasks_root: Path,
+    task_name: str,
+    variant_name: str,
+    run_index: int | None = None,
+) -> Path:
     task_dir_name = f"{task_name}_{variant_name}" if variant_name else task_name
+    if run_index is not None:
+        task_dir_name += f"_run_{run_index}"
     task_root = experiment_tasks_root / task_dir_name
     task_root.mkdir()
     return task_root
@@ -327,9 +409,7 @@ def run_setup_scripts(task_name: str, task_root: Path, env: dict) -> tuple[bool,
     return success, env
 
 
-def run_task_scripts(
-    task_name: str, variant_name: str, task_root: Path, env: dict
-) -> dict:
+def run_task_scripts(task_name: str, variant_name: str, task_root: Path, env: dict) -> dict:
     task_label = f"{task_name} with variant {variant_name}" if variant_name else task_name
     print(f"Running task: {task_label}")
     _success, env = run_scripts_with_env_propagation(

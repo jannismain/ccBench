@@ -5,6 +5,7 @@ from pathlib import Path
 from .files import copy_shard_with_script_rename, make_should_skip
 from .log import log
 from .paths import STAGING_SCRIPT
+from .provenance import record_layer
 from .scripts import run_script_with_env_capture
 
 
@@ -18,6 +19,7 @@ def process_shard(
 ) -> dict:
     """Process a shard and return the possibly updated environment."""
     if not (shard_dir / STAGING_SCRIPT).exists():
+        record_layer(task_root_dir, shard_dir, shard_name, shard_index, env)
         copy_shard_with_script_rename(
             shard_dir, project_dir, task_root_dir, shard_index, shard_name
         )
@@ -28,6 +30,7 @@ def process_shard(
         stage_path = Path(stage_dir)
         copy_shard_to_stage(shard_dir, stage_path)
         env = run_staging_script(stage_path, shard_name, env)
+        record_layer(task_root_dir, stage_path, shard_name, shard_index, env)
         copy_shard_with_script_rename(
             stage_path,
             project_dir,
