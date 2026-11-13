@@ -1,6 +1,5 @@
 """Tests for ccBench file merging functionality."""
 
-import importlib.util
 import json
 import os
 import subprocess
@@ -17,13 +16,8 @@ from typer.testing import CliRunner
 from ccbench.cli import _preprocess_tokens, app
 from ccbench.compare import (
     build_task_results,
-    extract_from_claude_metrics,
-    extract_from_cloc,
-    extract_from_exact_answer,
-    extract_from_judge_scores,
-    extract_from_static_analysis,
-    extract_from_test_pass_rate,
-    extract_metrics_summary,
+    load_metrics,
+    manifest_metrics,
     reference_indices_for_task_entries,
     render_comparison_json,
     render_comparison_table,
@@ -42,6 +36,20 @@ from ccbench.files import (
     copy_shard_with_script_rename,
     copy_task_shard_first,
     deep_merge_dict,
+)
+from ccbench.legacy_metrics import (
+    LEGACY_SPECS,
+    extract_from_claude_metrics,
+    extract_from_cloc,
+    extract_from_exact_answer,
+    extract_from_judge_scores,
+    extract_from_prototype_check,
+    extract_from_readability,
+    extract_from_screen_spec,
+    extract_from_skill_usage,
+    extract_from_static_analysis,
+    extract_from_test_pass_rate,
+    read_legacy_values,
 )
 from ccbench.paths import (
     CCBENCH_DIR,
@@ -64,16 +72,11 @@ from ccbench.shards import (
     process_shard,
 )
 
-
-def load_exact_answer_module():
-    module_path = Path(__file__).parent.parent / "evals" / "exact_answer" / "parse_answer.py"
-    spec = importlib.util.spec_from_file_location("exact_answer_parse", module_path)
-    assert spec is not None
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
-
+# Display specs keyed by the flat legacy metric names used in rendering tests.
+SPECS = {
+    key: {"label": label, "format": fmt, **({"change": change} if change else {})}
+    for key, (_namespaced, label, fmt, change) in LEGACY_SPECS.items()
+}
 
 class TestPaths:
     """Tests for shared filesystem paths."""
@@ -937,32 +940,6 @@ class TestScriptExecution:
         log_content = log_file.read_text()
         assert "hello stdout" in log_content
         assert "hello stderr" in log_content
-
-    def test_cloc_eval_uses_git_diff_changed_files(self, tmp_path):
-        """cloc eval counts changed tracked files and untracked files from project git state."""
-        project_dir = tmp_path / "project"
-        project_dir.mkdir()
-        (project_dir / "existing.py").write_text("print('base')\n")
-        (project_dir / "untouched.py").write_text("print('untouched')\n")
-        ensure_project_git_repo(project_dir)
-
-        (project_dir / "existing.py").write_text("print('base')\nprint('changed')\n")
-        (project_dir / "new.js").write_text("console.log('new');\n")
-
-        script_source = CCBENCH_DIR / "evals" / "cloc" / "run.sh"
-        (tmp_path / "run.000.cloc.sh").write_text(script_source.read_text())
-
-        env = os.environ.copy()
-        success, _ = run_scripts_with_env_propagation(
-            "run.*.sh", tmp_path, env, stop_on_failure=False
-        )
-
-        assert success
-        cloc_output = json.loads((tmp_path / "cloc.json").read_text())
-        assert cloc_output["header"]["n_files"] == 2
-        assert cloc_output["SUM"]["nFiles"] == 2
-        assert cloc_output["Python"]["nFiles"] == 1
-        assert cloc_output["JavaScript"]["nFiles"] == 1
 
     def test_process_shard_without_staging_script(
         self, temp_shard, temp_project, temp_task_root
@@ -2136,8 +2113,86 @@ class TestMetricExtraction:
         assert result["exact_answer_score"] == 1
         assert result["exact_answer_matched"] is True
 
+    def test_extract_from_screen_spec(self):
+        data = {
+            "status": "completed",
+            "screen_found": 1,
+            "layout_score": 0.75,
+            "content_score": 0.5,
+            "tooling_calls": {"mcp": 3, "skill": 1, "script": 2, "other": 4},
+        }
+        result = extract_from_screen_spec(data)
+        assert result["spec_screen_found"] == 1
+        assert result["spec_layout"] == 0.75
+        assert result["spec_content"] == 0.5
+        assert result["spec_tooling_calls"] == 6
+
+    def test_extract_from_prototype_check(self):
+        data = {
+            "status": "completed",
+            "screen_found": 1,
+            "content": {"score": 1.0},
+            "layout": {"score": 0.5},
+            "states": {"score": 0.75},
+            "interaction": {"score": 0.0},
+            "tooling_calls": {"mcp": 2, "skill": 0, "script": 1, "other": 9},
+        }
+        result = extract_from_prototype_check(data)
+        assert result["proto_screen_found"] == 1
+        assert result["proto_content"] == 1.0
+        assert result["proto_layout"] == 0.5
+        assert result["proto_states"] == 0.75
+        assert result["proto_interaction"] == 0.0
+        assert result["proto_tooling_calls"] == 3
+
+    def test_extract_from_prototype_check_without_page(self):
+        result = extract_from_prototype_check({"screen_found": 0})
+        assert result["proto_layout"] is None
+        assert result["proto_tooling_calls"] == 0
+
+    def test_extract_from_readability(self):
+        data = {
+            "status": "completed",
+            "words": 120,
+            "flesch_reading_ease": 55.2,
+            "flesch_kincaid_grade": 9.1,
+            "gunning_fog": 11.4,
+            "avg_words_per_sentence": 15.0,
+            "list_items": 4,
+            "em_dashes": 2,
+            "answer_count": 3,
+            "stats": {"words": {"mean": 40.0, "min": 30, "max": 50}},
+        }
+        result = extract_from_readability(data)
+        assert result == {
+            "answer_count": 3,
+            "answer_words": 120,
+            "words_per_answer": 40.0,
+            "flesch_reading_ease": 55.2,
+            "flesch_kincaid_grade": 9.1,
+            "gunning_fog": 11.4,
+            "avg_words_per_sentence": 15.0,
+            "answer_list_items": 4,
+            "answer_em_dashes": 2,
+        }
+
+    def test_extract_from_readability_without_stats(self):
+        """Results from before per-answer stats existed still extract."""
+        result = extract_from_readability({"words": 10})
+        assert result["answer_words"] == 10
+        assert result["words_per_answer"] is None
+
+    def test_extract_from_skill_usage(self):
+        data = {"status": "completed", "skill": "unslop", "invocations": 1, "used": 1}
+        result = extract_from_skill_usage(data)
+        assert result == {"skill_used": 1, "skill_invocations": 1}
+
+    def test_extract_from_screen_spec_without_tooling(self):
+        result = extract_from_screen_spec({"screen_found": 0, "layout_score": 0.0})
+        assert result["spec_tooling_calls"] == 0
+
     def test_extract_metrics_summary_missing_files(self, tmp_path):
-        result = extract_metrics_summary(tmp_path)
+        result = read_legacy_values(tmp_path)
         assert result == {}
 
     def test_extract_metrics_summary_with_files(self, tmp_path):
@@ -2161,95 +2216,97 @@ class TestMetricExtraction:
         (tmp_path / "cloc.json").write_text(
             json.dumps({"SUM": {"code": 15, "nFiles": 2, "blank": 1, "comment": 0}})
         )
-        result = extract_metrics_summary(tmp_path)
+        result = read_legacy_values(tmp_path)
         assert result["cost_usd"] == 0.05
         assert result["loc_total"] == 15
 
 
-class TestExactAnswerEval:
-    """Tests for the exact_answer eval shard."""
 
-    expected = "41384454324123574919196129"
-
-    @pytest.mark.parametrize(
-        "answer_text",
-        [
-            "41384454324123574919196129",
-            "41,384,454,324,123,574,919,196,129",
-            "41 384 454 324 123 574 919 196 129",
-            "41_384_454_324_123_574_919_196_129",
-            "4.1384454324123574919196129e25",
-            "41384454324123574919196128 + 1",
-        ],
+def write_eval_metrics(task_dir: Path, eval_name: str, metrics: dict) -> None:
+    metrics_dir = task_dir / "metrics"
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    (metrics_dir / f"{eval_name}.json").write_text(
+        json.dumps({"eval": eval_name, "metrics": metrics})
     )
-    def test_check_answer_accepts_equivalent_representations(self, answer_text):
-        """Equivalent numeric formats should pass the exact answer check."""
-        parser = load_exact_answer_module()
-        matched, matched_value = parser.check_answer(answer_text, self.expected)
 
-        assert matched is True
-        assert matched_value is not None
 
-    def test_check_answer_rejects_wrong_value(self):
-        """Wrong numeric answers should fail the exact answer check."""
-        parser = load_exact_answer_module()
-        matched, matched_value = parser.check_answer(
-            "41384454324123574919196128",
-            self.expected,
+class TestLoadMetrics:
+    """Tests for reading metrics contributed by evals."""
+
+    def test_namespaces_values_and_keeps_specs(self, tmp_path):
+        write_eval_metrics(
+            tmp_path,
+            "cloc",
+            {"code": {"value": 12, "label": "Lines of code", "format": "{:.0f}", "change": "percent"}},
         )
 
-        assert matched is False
-        assert matched_value is None
+        values, specs = load_metrics(tmp_path)
 
-    def test_collect_output_text_reads_claude_assistant_text(self, tmp_path):
-        """Claude JSONL output should be reduced to assistant text blocks."""
-        parser = load_exact_answer_module()
-        output = {
-            "type": "assistant",
-            "message": {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "41,384,454,324,123,574,919,196,129",
-                    }
-                ]
-            },
+        assert values == {"cloc.code": 12}
+        assert specs == {
+            "cloc.code": {"label": "Lines of code", "format": "{:.0f}", "change": "percent"}
         }
-        (tmp_path / "output.json").write_text(json.dumps(output) + "\n")
 
-        text, sources = parser.collect_output_text(tmp_path)
+    def test_orders_evals_by_experiment_order(self, tmp_path):
+        for name in ["alpha", "beta", "gamma"]:
+            write_eval_metrics(tmp_path, name, {"m": {"value": 1, "label": name}})
 
-        assert sources == ["output.json"]
-        assert "41,384,454,324,123,574,919,196,129" in text
+        _values, specs = load_metrics(tmp_path, ["gamma", "alpha"])
 
-    def test_collect_output_text_reads_response_text_first(self, tmp_path):
-        """Plain llm shard output should be evaluated directly."""
-        parser = load_exact_answer_module()
-        (tmp_path / "response.txt").write_text("41,384,454,324,123,574,919,196,129\n")
-        (tmp_path / "output.json").write_text(
-            json.dumps(
-                {
-                    "type": "assistant",
-                    "message": {"content": [{"type": "text", "text": "wrong"}]},
-                }
-            )
-            + "\n"
+        assert list(specs) == ["gamma.m", "alpha.m", "beta.m"]
+
+    def test_skips_malformed_files_and_entries(self, tmp_path):
+        write_eval_metrics(
+            tmp_path,
+            "mixed",
+            {
+                "ok": {"value": True, "label": "Ok"},
+                "no_label": {"value": 1},
+                "not_a_dict": 3,
+            },
+        )
+        (tmp_path / "metrics" / "broken.json").write_text("{not json")
+
+        values, specs = load_metrics(tmp_path)
+
+        assert values == {"mixed.ok": None}
+        assert specs == {"mixed.ok": {"label": "Ok", "format": "{}"}}
+
+    def test_falls_back_to_legacy_eval_files(self, tmp_path):
+        (tmp_path / "cloc.json").write_text(json.dumps({"SUM": {"code": 15, "nFiles": 2}}))
+
+        values, specs = load_metrics(tmp_path)
+
+        assert values == {"cloc.code": 15, "cloc.files": 2}
+        assert specs["cloc.code"]["change"] == "percent"
+
+    def test_upgrades_flat_metrics_from_old_manifests(self, tmp_path):
+        values, specs = manifest_metrics(
+            {"metrics": {"loc_total": 15, "judge_readability": 4}}, tmp_path
         )
 
-        text, sources = parser.collect_output_text(tmp_path)
+        assert values == {"cloc.code": 15, "judge_session.readability": 4}
+        assert specs["judge_session.readability"]["format"] == "{:.0f}/5"
 
-        assert sources == ["response.txt", "output.json"]
-        assert text.splitlines()[0] == "41,384,454,324,123,574,919,196,129"
+    def test_uses_ordered_specs_recorded_in_manifest(self, tmp_path):
+        manifest = {
+            "metrics": {"score.z": 1, "score.a": 2},
+            "metric_specs": [
+                {"key": "score.z", "label": "Z", "format": "{}"},
+                {"key": "score.a", "label": "A", "format": "{}"},
+            ],
+        }
 
-    def test_collect_output_text_reads_numeric_response_as_plain_text(self, tmp_path):
-        """A bare numeric response file should not be treated as JSON output."""
-        parser = load_exact_answer_module()
-        (tmp_path / "response.txt").write_text("41384454324123574919196129\n")
+        _values, specs = manifest_metrics(manifest, tmp_path)
 
-        text, sources = parser.collect_output_text(tmp_path)
+        assert list(specs) == ["score.z", "score.a"]
+        assert specs["score.z"] == {"label": "Z", "format": "{}"}
 
-        assert sources == ["response.txt"]
-        assert text.strip() == "41384454324123574919196129"
+    def test_invalid_format_falls_back_to_plain_value(self):
+        table = render_comparison_table(
+            ["a"], [{"x.m": 1.5}], {"x.m": {"label": "Metric", "format": "{:d}"}}
+        )
+        assert "1.5" in table
 
 
 class TestCompareTable:
@@ -2287,7 +2344,7 @@ class TestCompareTable:
                 "test_pass_rate": 1.0,
             },
         ]
-        table = render_comparison_table(columns, metrics)
+        table = render_comparison_table(columns, metrics, SPECS)
         assert "baseline" in table
         assert "variant-a" in table
         assert "$0.0500" in table
@@ -2309,7 +2366,7 @@ class TestCompareTable:
             {"cost_usd": 0.05, "test_pass_rate": None},
             {"cost_usd": 0.10, "test_pass_rate": 1.0},
         ]
-        table = render_comparison_table(columns, metrics)
+        table = render_comparison_table(columns, metrics, SPECS)
         assert "\u2014" in table  # em dash for missing value
         assert "100%" in table
 
@@ -2319,11 +2376,11 @@ class TestCompareTable:
             {"cost_usd": 0.05, "judge_readability": None},
             {"cost_usd": 0.10, "judge_readability": None},
         ]
-        table = render_comparison_table(columns, metrics)
+        table = render_comparison_table(columns, metrics, SPECS)
         assert "Readability" not in table
 
     def test_no_metrics_message(self):
-        table = render_comparison_table(["a"], [{}])
+        table = render_comparison_table(["a"], [{}], SPECS)
         assert "No metrics found" in table
 
     def test_json_output_structure(self):
@@ -2332,7 +2389,7 @@ class TestCompareTable:
             {"cost_usd": 0.05, "turns": 4, "total_tokens": 100},
             {"cost_usd": 0.30, "turns": 13, "total_tokens": 125},
         ]
-        raw = render_comparison_json(columns, metrics)
+        raw = render_comparison_json(columns, metrics, SPECS)
         data = json.loads(raw)
         assert data["variants"] == ["baseline", "variant"]
         assert data["metrics"]["cost_usd"] == [0.05, 0.30]
@@ -2356,8 +2413,8 @@ class TestCompareTable:
             {"cost_usd": 50.0},
         ]
 
-        table = render_comparison_table(columns, metrics)
-        raw = render_comparison_json(columns, metrics)
+        table = render_comparison_table(columns, metrics, SPECS)
+        raw = render_comparison_json(columns, metrics, SPECS)
         data = json.loads(raw)
 
         assert "$15.0000 (+50%)" in table
@@ -2372,8 +2429,8 @@ class TestCompareTable:
             {"duration_s": 10.0},
         ]
 
-        table = render_comparison_table(columns, metrics)
-        raw = render_comparison_json(columns, metrics)
+        table = render_comparison_table(columns, metrics, SPECS)
+        raw = render_comparison_json(columns, metrics, SPECS)
         data = json.loads(raw)
 
         assert "30.0 (+200%)" in table
@@ -2387,8 +2444,8 @@ class TestCompareTable:
             {"output_tokens": 150},
         ]
 
-        table = render_comparison_table(columns, metrics)
-        raw = render_comparison_json(columns, metrics)
+        table = render_comparison_table(columns, metrics, SPECS)
+        raw = render_comparison_json(columns, metrics, SPECS)
         data = json.loads(raw)
 
         assert "150 (+50%)" in table
@@ -2416,6 +2473,7 @@ class TestCompareTable:
         raw = render_comparison_json(
             ["aoc_2025_01", "aoc_2025_02"],
             [{"cost_usd": 1.0}, {"cost_usd": 2.0}],
+            SPECS,
             reference_indices,
         )
 
@@ -2488,23 +2546,23 @@ class TestCompareTable:
         assert task_results["task"]["variants"] == ["baseline"]
         assert task_results["task"]["sample_counts"] == {"baseline": 2}
         metrics = task_results["task"]["metrics"][0]
-        assert metrics["cost_usd"] == 0.2
-        assert metrics["duration_s"] == 20
-        assert metrics["turns"] == 4
-        assert metrics["total_tokens"] == 105
-        assert metrics["input_tokens"] == 5
-        assert metrics["cache_tokens"] == 0
-        assert metrics["output_tokens"] == 100
-        assert metrics["input_token_cost_usd"] == pytest.approx(0.0095238095)
-        assert metrics["cache_token_cost_usd"] == 0
-        assert metrics["output_token_cost_usd"] == pytest.approx(0.1904761905)
-        assert task_results["task"]["metric_stats"][0]["cost_usd"] == {
+        assert metrics["claude_code_metrics.cost_usd"] == 0.2
+        assert metrics["claude_code_metrics.duration_s"] == 20
+        assert metrics["claude_code_metrics.turns"] == 4
+        assert metrics["claude_code_metrics.total_tokens"] == 105
+        assert metrics["claude_code_metrics.input_tokens"] == 5
+        assert metrics["claude_code_metrics.cache_tokens"] == 0
+        assert metrics["claude_code_metrics.output_tokens"] == 100
+        assert metrics["claude_code_metrics.input_token_cost_usd"] == pytest.approx(0.0095238095)
+        assert metrics["claude_code_metrics.cache_token_cost_usd"] == 0
+        assert metrics["claude_code_metrics.output_token_cost_usd"] == pytest.approx(0.1904761905)
+        assert task_results["task"]["metric_stats"][0]["claude_code_metrics.cost_usd"] == {
             "mean": 0.2,
             "min": 0.1,
             "max": 0.3,
             "count": 2,
         }
-        assert task_results["task"]["metric_stats"][0]["duration_s"] == {
+        assert task_results["task"]["metric_stats"][0]["claude_code_metrics.duration_s"] == {
             "mean": 20,
             "min": 10.0,
             "max": 30.0,
@@ -2584,7 +2642,7 @@ class TestCompareTable:
         data = json.loads(render_grouped_comparison_json(task_results))
 
         assert "$2.0000 (+100%)" in table
-        assert data["tasks"]["task"]["metric_changes_pct"]["cost_usd"] == [None, 100.0]
+        assert data["tasks"]["task"]["metric_changes_pct"]["claude_code_metrics.cost_usd"] == [None, 100.0]
 
     def test_percent_change_skips_zero_baseline(self):
         columns = ["baseline", "variant"]
@@ -2593,8 +2651,8 @@ class TestCompareTable:
             {"cost_usd": 1.0, "duration_s": 5.0},
         ]
 
-        table = render_comparison_table(columns, metrics)
-        raw = render_comparison_json(columns, metrics)
+        table = render_comparison_table(columns, metrics, SPECS)
+        raw = render_comparison_json(columns, metrics, SPECS)
         data = json.loads(raw)
 
         assert "$1.0000 (" not in table
@@ -2743,12 +2801,39 @@ class TestCompareCommand:
         assert result.returncode == 0
         data = json.loads(result.stdout)
         assert data["tasks"]["task"]["variants"] == ["baseline", "variant"]
-        assert data["tasks"]["task"]["metrics"]["cost_usd"] == [0.05, 0.30]
+        assert data["tasks"]["task"]["metrics"]["claude_code_metrics.cost_usd"] == [0.05, 0.30]
         assert data["tasks"]["task"]["sample_counts"] == {"baseline": 1, "variant": 1}
-        assert data["tasks"]["task"]["metric_stats"]["cost_usd"] == [
+        assert data["tasks"]["task"]["metric_stats"]["claude_code_metrics.cost_usd"] == [
             {"mean": 0.05, "min": 0.05, "max": 0.05, "count": 1},
             {"mean": 0.30, "min": 0.30, "max": 0.30, "count": 1},
         ]
+
+    def test_compare_renders_eval_contributed_metrics(self, tmp_path):
+        tasks = tmp_path / "tasks"
+        for name, words in [("task_baseline", 100), ("task_variant", 150)]:
+            write_eval_metrics(
+                tasks / name,
+                "readability",
+                {
+                    "words": {
+                        "value": words,
+                        "label": "Answer words",
+                        "format": "{:,.0f}",
+                        "change": "percent",
+                    }
+                },
+            )
+
+        result = subprocess.run(
+            ["uv", "run", "ccbench", "compare", str(tmp_path)],
+            capture_output=True,
+            text=True,
+            cwd=CCBENCH_DIR,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "Answer words" in result.stdout
+        assert "150 (+50%)" in result.stdout
 
     def test_compare_nonexistent_dir(self, tmp_path):
         result = subprocess.run(

@@ -1,0 +1,37 @@
+{
+  "board_sha256": "036120d4290a83e141e6c4a251bbda79f054e9336c62f9b595b07b241679b26e",
+  "headings": ["Procedures", "Engagement 1", "Metadata", "Determine applicable procedures"],
+  "right_headings": ["Assistant", "Procedure Description"],
+  "input_hint": "Type your question",
+  "steps": [
+    "Scoping",
+    "01 Leadsheet",
+    "02 Reconciliation",
+    "03 Additions",
+    "04a Transfers",
+    "05 Disposals",
+    "06 Verify Existence",
+    "Workbook"
+  ],
+  "selected_step": "Scoping",
+  "toggles": [
+    {"label": "01 Leadsheet", "on": true},
+    {"label": "02 Reconciliation", "on": true},
+    {"label": "03 Additions", "on": false},
+    {"label": "04a Transfers", "on": true},
+    {"label": "05 Disposals", "on": false}
+  ],
+  "fields": [
+    {"label": "Audit Client", "value": "Client A"},
+    {"label": "Financial year-end", "value": "Dec 31"},
+    {"label": "Currency", "value": "Euro"},
+    {"label": "PM", "value": "123"},
+    {"label": "CTT", "value": "456"}
+  ],
+  "initial_message": "Ich habe die Werte aus ATLAS kopiert",
+  "wrong_screen_marker": "Dein Scoping wurde",
+  "interaction": {
+    "toggle": "04a Transfers",
+    "message": "Your scoping has been successfully applied"
+  }
+}

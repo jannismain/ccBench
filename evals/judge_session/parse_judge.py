@@ -47,6 +47,25 @@ def extract_json_from_response(judge_output_path: Path) -> dict | None:
         return None
 
 
+COMPARE_METRICS_FILE = Path("metrics/judge_session.json")
+
+
+def write_compare_metrics(scores: dict) -> None:
+    """Contribute metrics to `ccbench compare`; None values render as missing."""
+    labels = {
+        "readability": "Readability",
+        "idiomatic_style": "Idiomatic style",
+        "error_handling": "Error handling",
+        "efficiency": "Efficiency",
+    }
+    metrics = {
+        key: {"value": scores.get(key), "label": label, "format": "{:.0f}/5"}
+        for key, label in labels.items()
+    }
+    COMPARE_METRICS_FILE.parent.mkdir(exist_ok=True)
+    COMPARE_METRICS_FILE.write_text(json.dumps({"eval": "judge_session", "metrics": metrics}, indent=2))
+
+
 def main():
     judge_output = Path("judge_output.json")
     output_file = Path("judge_scores.json")
@@ -54,6 +73,7 @@ def main():
     if not judge_output.exists():
         result = {"status": "error", "reason": "judge_output.json not found"}
         output_file.write_text(json.dumps(result, indent=2))
+        write_compare_metrics({})
         print("Error: judge_output.json not found", file=sys.stderr)
         return
 
@@ -61,10 +81,12 @@ def main():
     if scores is None:
         result = {"status": "error", "reason": "could not extract JSON scores from judge output"}
         output_file.write_text(json.dumps(result, indent=2))
+        write_compare_metrics({})
         print("Error: could not extract structured scores from judge output", file=sys.stderr)
         return
 
     output_file.write_text(json.dumps(scores, indent=2))
+    write_compare_metrics(scores)
     print(f"Judge scores extracted: {scores}")
 
 

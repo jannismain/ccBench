@@ -1,47 +1,17 @@
 import json
 import sys
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 from numbers import Real
 from pathlib import Path
 
 import yaml
 
 from . import paths
+from .legacy_metrics import read_legacy_metrics, upgrade_legacy_values
 from .log import log
 
-METRIC_DISPLAY = [
-    ("cost_usd", "Cost (USD)", lambda v: f"${v:.4f}"),
-    ("input_token_cost_usd", "Input token cost (USD)", lambda v: f"${v:.4f}"),
-    ("cache_token_cost_usd", "Cache token cost (USD)", lambda v: f"${v:.4f}"),
-    ("output_token_cost_usd", "Output token cost (USD)", lambda v: f"${v:.4f}"),
-    ("duration_s", "Duration (s)", lambda v: f"{v:.1f}"),
-    ("turns", "Turns", lambda v: str(int(v))),
-    ("total_tokens", "Total tokens", lambda v: f"{int(v):,}"),
-    ("input_tokens", "Input tokens", lambda v: f"{int(v):,}"),
-    ("cache_tokens", "Cache tokens", lambda v: f"{int(v):,}"),
-    ("output_tokens", "Output tokens", lambda v: f"{int(v):,}"),
-    ("loc_total", "Lines of code", lambda v: str(int(v))),
-    ("test_pass_rate", "Test pass rate", lambda v: f"{v:.0%}"),
-    ("tests_passed", "Tests passed", lambda v: str(int(v))),
-    ("tests_failed", "Tests failed", lambda v: str(int(v))),
-    ("test_duration_s", "Test duration (s)", lambda v: f"{v:.2f}"),
-    ("lint_errors", "Lint errors", lambda v: str(int(v))),
-    ("lint_warnings", "Lint warnings", lambda v: str(int(v))),
-    ("judge_readability", "Readability", lambda v: f"{int(v)}/5"),
-    ("judge_idiomatic", "Idiomatic style", lambda v: f"{int(v)}/5"),
-    ("judge_error_handling", "Error handling", lambda v: f"{int(v)}/5"),
-    ("judge_efficiency", "Efficiency", lambda v: f"{int(v)}/5"),
-    ("exact_answer_score", "Exact answer", lambda v: f"{int(v)}/1"),
-]
-
-PERCENT_CHANGE_METRICS = {
-    "cost_usd",
-    "duration_s",
-    "total_tokens",
-    "output_tokens",
-    "loc_total",
-}
+METRICS_DIR = "metrics"
 
 
 @dataclass(frozen=True)
@@ -49,218 +19,73 @@ class CompareRecord:
     task: str
     variant: str
     metrics: dict
+    specs: dict = field(default_factory=dict)
 
 
-def extract_from_claude_metrics(data: dict) -> dict:
-    overall = data.get("overall", {})
-    usage = overall.get("usage", {})
-    token_metrics = extract_token_metrics(overall)
-    return {
-        "cost_usd": overall.get("total_cost_usd"),
-        "input_token_cost_usd": token_metrics.get("input_token_cost_usd"),
-        "cache_token_cost_usd": token_metrics.get("cache_token_cost_usd"),
-        "output_token_cost_usd": token_metrics.get("output_token_cost_usd"),
-        "duration_s": (overall.get("duration_ms") or 0) / 1000,
-        "turns": overall.get("num_turns"),
-        "total_tokens": token_metrics.get("total_tokens"),
-        "input_tokens": token_metrics.get("input_tokens", usage.get("input_tokens")),
-        "cache_tokens": token_metrics.get("cache_tokens"),
-        "output_tokens": token_metrics.get("output_tokens", usage.get("output_tokens")),
-        "cache_read_tokens": usage.get("cache_read_input_tokens"),
-        "is_error": overall.get("is_error"),
-    }
+def load_metrics(task_dir: Path, eval_order: Iterable[str] = ()) -> tuple[dict, dict]:
+    """Read values and display specs contributed by evals via `metrics/<eval>.json`.
 
-
-def extract_token_metrics(overall: dict) -> dict:
-    model_usage = overall.get("model_usage")
-    if isinstance(model_usage, dict) and model_usage:
-        return extract_model_usage_token_metrics(model_usage)
-
-    usage = overall.get("usage", {})
-    if not isinstance(usage, dict):
-        usage = {}
-    return allocate_token_costs(
-        input_tokens=usage.get("input_tokens"),
-        cache_tokens=sum_numbers(
-            usage.get("cache_creation_input_tokens"),
-            usage.get("cache_read_input_tokens"),
-        ),
-        output_tokens=usage.get("output_tokens"),
-        cost_usd=overall.get("total_cost_usd"),
-    )
-
-
-def extract_model_usage_token_metrics(model_usage: dict) -> dict:
-    result = empty_token_metrics()
-    for model in model_usage.values():
-        if not isinstance(model, dict):
+    Keys are namespaced as `<eval>.<metric>`. Results recorded before evals wrote
+    metrics files fall back to the frozen legacy extractors.
+    """
+    files = sorted((task_dir / METRICS_DIR).glob("*.json"))
+    if not files:
+        return read_legacy_metrics(task_dir)
+    order = {name: index for index, name in enumerate(eval_order)}
+    files.sort(key=lambda path: (order.get(path.stem, len(order)), path.stem))
+    values: dict = {}
+    specs: dict = {}
+    for path in files:
+        try:
+            data = json.loads(path.read_text())
+            eval_name = str(data.get("eval") or path.stem)
+            metrics = data["metrics"]
+            entries = metrics.items()
+        except (json.JSONDecodeError, KeyError, AttributeError) as e:
+            log.warning(f"Failed to parse {path}: {e}")
             continue
-        metrics = allocate_token_costs(
-            input_tokens=get_number(model, "inputTokens", "input_tokens"),
-            cache_tokens=sum_numbers(
-                get_number(
-                    model,
-                    "cacheCreationInputTokens",
-                    "cache_creation_input_tokens",
-                ),
-                get_number(model, "cacheReadInputTokens", "cache_read_input_tokens"),
-            ),
-            output_tokens=get_number(model, "outputTokens", "output_tokens"),
-            cost_usd=get_number(model, "costUSD", "cost_usd", "total_cost_usd"),
-        )
-        add_token_metrics(result, metrics)
-    return result
+        for name, entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("label"), str):
+                log.warning(f"Ignoring malformed metric '{name}' in {path}")
+                continue
+            key = f"{eval_name}.{name}"
+            value = entry.get("value")
+            values[key] = value if is_number(value) else None
+            specs[key] = metric_spec(entry)
+    return values, specs
 
 
-def allocate_token_costs(
-    *,
-    input_tokens,
-    cache_tokens,
-    output_tokens,
-    cost_usd,
-) -> dict:
-    result = {
-        "input_tokens": normalize_number(input_tokens),
-        "cache_tokens": normalize_number(cache_tokens),
-        "output_tokens": normalize_number(output_tokens),
-        "total_tokens": None,
-        "input_token_cost_usd": None,
-        "cache_token_cost_usd": None,
-        "output_token_cost_usd": None,
-    }
-    numeric_token_values = [
-        value
-        for value in (
-            result["input_tokens"],
-            result["cache_tokens"],
-            result["output_tokens"],
-        )
-        if is_number(value)
-    ]
-    total_tokens = sum(numeric_token_values) if numeric_token_values else None
-    result["total_tokens"] = total_tokens
-    if is_number(cost_usd) and total_tokens:
-        result["input_token_cost_usd"] = (
-            cost_usd * (result["input_tokens"] or 0) / total_tokens
-        )
-        result["cache_token_cost_usd"] = (
-            cost_usd * (result["cache_tokens"] or 0) / total_tokens
-        )
-        result["output_token_cost_usd"] = (
-            cost_usd * (result["output_tokens"] or 0) / total_tokens
-        )
-    return result
+def metric_spec(entry: dict) -> dict:
+    spec = {"label": entry["label"], "format": str(entry.get("format") or "{}")}
+    if entry.get("change") == "percent":
+        spec["change"] = "percent"
+    return spec
 
 
-def empty_token_metrics() -> dict:
-    return {
-        "input_tokens": 0,
-        "cache_tokens": 0,
-        "output_tokens": 0,
-        "total_tokens": 0,
-        "input_token_cost_usd": None,
-        "cache_token_cost_usd": None,
-        "output_token_cost_usd": None,
-    }
-
-
-def add_token_metrics(total: dict, metrics: dict) -> None:
-    for key, value in metrics.items():
-        if is_number(value):
-            if not is_number(total[key]):
-                total[key] = 0
-            total[key] += value
-
-
-def get_number(data: dict, *keys: str):
-    for key in keys:
-        value = data.get(key)
-        if is_number(value):
-            return value
-    return None
-
-
-def sum_numbers(*values) -> float | int | None:
-    numeric_values = [value for value in values if is_number(value)]
-    if not numeric_values:
-        return None
-    return sum(numeric_values)
-
-
-def normalize_number(value):
-    return value if is_number(value) else None
-
-
-def extract_from_cloc(data: dict) -> dict:
-    summary = data.get("SUM", {})
-    return {
-        "loc_total": summary.get("code"),
-        "loc_files": summary.get("nFiles"),
-    }
-
-
-def extract_from_test_pass_rate(data: dict) -> dict:
-    if data.get("status") == "skipped":
-        return {
-            "test_pass_rate": None,
-            "tests_passed": None,
-            "tests_failed": None,
-            "test_duration_s": None,
+def manifest_metrics(manifest: dict, task_dir: Path) -> tuple[dict, dict]:
+    """Return metric values and specs, preferring those recorded in the manifest."""
+    if "metrics" not in manifest:
+        return load_metrics(task_dir, eval_names(manifest))
+    if "metric_specs" not in manifest:
+        return upgrade_legacy_values(manifest["metrics"])
+    specs = manifest["metric_specs"]
+    if isinstance(specs, list):
+        specs = {
+            entry["key"]: {name: value for name, value in entry.items() if name != "key"}
+            for entry in specs
         }
-    return {
-        "test_pass_rate": data.get("pass_rate"),
-        "tests_passed": data.get("tests_passed"),
-        "tests_failed": data.get("tests_failed"),
-        "test_duration_s": data.get("duration_s"),
-    }
+    return manifest["metrics"], specs
 
 
-def extract_from_static_analysis(data: dict) -> dict:
-    if data.get("status") == "skipped":
-        return {"lint_errors": None, "lint_warnings": None}
-    return {
-        "lint_errors": data.get("lint_errors"),
-        "lint_warnings": data.get("lint_warnings"),
-    }
+def eval_names(manifest: dict) -> list[str]:
+    return [entry.get("name") for entry in manifest.get("evals", []) if isinstance(entry, dict)]
 
 
-def extract_from_judge_scores(data: dict) -> dict:
-    return {
-        "judge_readability": data.get("readability"),
-        "judge_idiomatic": data.get("idiomatic_style"),
-        "judge_error_handling": data.get("error_handling"),
-        "judge_efficiency": data.get("efficiency"),
-    }
-
-
-def extract_from_exact_answer(data: dict) -> dict:
-    return {
-        "exact_answer_score": data.get("score"),
-        "exact_answer_matched": data.get("matched"),
-    }
-
-
-KNOWN_EVAL_FILES: dict[str, Callable[[dict], dict]] = {
-    "claude_code_metrics.json": extract_from_claude_metrics,
-    "cloc.json": extract_from_cloc,
-    "test_pass_rate.json": extract_from_test_pass_rate,
-    "static_analysis.json": extract_from_static_analysis,
-    "judge_scores.json": extract_from_judge_scores,
-    "exact_answer.json": extract_from_exact_answer,
-}
-
-
-def extract_metrics_summary(task_dir: Path) -> dict:
-    metrics = {}
-    for filename, extractor in KNOWN_EVAL_FILES.items():
-        filepath = task_dir / filename
-        if filepath.exists():
-            try:
-                data = json.loads(filepath.read_text())
-                metrics.update(extractor(data))
-            except (json.JSONDecodeError, KeyError) as e:
-                log.warning(f"Failed to parse {filepath}: {e}")
-    return metrics
+def format_metric(fmt: str, value) -> str:
+    try:
+        return fmt.format(value)
+    except (ValueError, TypeError, IndexError, KeyError):
+        return str(value)
 
 
 def resolve_task_dirs(result_dirs: list[str], across: bool) -> list[tuple[str, Path]]:
@@ -301,11 +126,12 @@ def task_label(run_dir: Path, task_dir: Path, across: bool) -> str:
 def render_comparison_table(
     columns: list[str],
     metrics: list[dict],
+    specs: dict[str, dict],
     reference_indices: list[int | None] | None = None,
     metric_stats: list[dict] | None = None,
 ) -> str:
     reference_indices = reference_indices or infer_reference_indices(columns)
-    rows = comparison_rows(metrics, reference_indices, metric_stats)
+    rows = comparison_rows(metrics, specs, reference_indices, metric_stats)
     if not rows:
         return "No metrics found."
 
@@ -327,29 +153,30 @@ def render_comparison_table(
 
 def comparison_rows(
     metrics: list[dict],
+    specs: dict[str, dict],
     reference_indices: list[int | None],
     metric_stats: list[dict] | None = None,
 ) -> list[tuple[str, list[str]]]:
     rows = []
-    for key, label, fmt in METRIC_DISPLAY:
+    for key, spec in specs.items():
         values = [m.get(key) for m in metrics]
         if any(v is not None for v in values):
             stats = [s.get(key) for s in metric_stats] if metric_stats else []
-            formatted = format_metric_values(key, values, fmt, reference_indices, stats)
-            rows.append((label, formatted))
+            formatted = format_metric_values(spec, values, reference_indices, stats)
+            rows.append((spec["label"], formatted))
     return rows
 
 
 def format_metric_values(
-    key: str,
+    spec: dict,
     values: list,
-    fmt: Callable,
     reference_indices: list[int | None],
     stats: list[dict | None],
 ) -> list[str]:
+    fmt = spec["format"]
     changes = (
         percent_changes(values, reference_indices)
-        if key in PERCENT_CHANGE_METRICS
+        if spec.get("change") == "percent"
         else []
     )
     formatted = []
@@ -357,7 +184,7 @@ def format_metric_values(
         if value is None:
             formatted.append("\u2014")
             continue
-        text = fmt(value)
+        text = format_metric(fmt, value)
         stat = stats[index] if index < len(stats) else None
         if stat is not None and stat.get("count", 0) > 1:
             text = f"{text} [{format_metric_range(stat, fmt)}]"
@@ -368,8 +195,8 @@ def format_metric_values(
     return formatted
 
 
-def format_metric_range(stats: dict, fmt: Callable) -> str:
-    return f"{fmt(stats['min'])}..{fmt(stats['max'])}"
+def format_metric_range(stats: dict, fmt: str) -> str:
+    return f"{format_metric(fmt, stats['min'])}..{format_metric(fmt, stats['max'])}"
 
 
 def percent_changes(
@@ -407,15 +234,16 @@ def format_percent_change(value: float) -> str:
 def render_comparison_json(
     columns: list[str],
     metrics: list[dict],
+    specs: dict[str, dict],
     reference_indices: list[int | None] | None = None,
 ) -> str:
     reference_indices = reference_indices or infer_reference_indices(columns)
     result = {"variants": columns, "metrics": {}, "metric_changes_pct": {}}
-    for key, _label, _ in METRIC_DISPLAY:
+    for key, spec in specs.items():
         values = [m.get(key) for m in metrics]
         if any(v is not None for v in values):
             result["metrics"][key] = values
-            if key in PERCENT_CHANGE_METRICS and has_comparisons(reference_indices):
+            if spec.get("change") == "percent" and has_comparisons(reference_indices):
                 result["metric_changes_pct"][key] = percent_changes(
                     values, reference_indices
                 )
@@ -436,6 +264,7 @@ def render_grouped_comparison_table(task_results: dict[str, dict]) -> str:
                 task_data["sample_counts"],
             ),
             task_data["metrics"],
+            task_data["specs"],
             task_data["reference_indices"],
             task_data["metric_stats"],
         )
@@ -454,18 +283,24 @@ def render_grouped_comparison_json(task_results: dict[str, dict]) -> str:
             render_comparison_json(
                 task_data["variants"],
                 task_data["metrics"],
+                task_data["specs"],
                 task_data["reference_indices"],
             )
         )
         task_json["sample_counts"] = task_data["sample_counts"]
-        task_json["metric_stats"] = metric_stats_by_key(task_data["metric_stats"])
+        task_json["metric_stats"] = metric_stats_by_key(
+            task_data["metric_stats"], task_data["specs"]
+        )
+        task_json["metric_specs"] = task_data["specs"]
         result["tasks"][task_name] = task_json
     return json.dumps(result, indent=2)
 
 
-def metric_stats_by_key(metric_stats: list[dict]) -> dict[str, list[dict | None]]:
+def metric_stats_by_key(
+    metric_stats: list[dict], specs: dict[str, dict]
+) -> dict[str, list[dict | None]]:
     result = {}
-    for key, _label, _fmt in METRIC_DISPLAY:
+    for key in specs:
         values = [stats.get(key) for stats in metric_stats]
         if any(value is not None for value in values):
             result[key] = values
@@ -479,10 +314,14 @@ def build_task_results(task_entries: list[tuple[str, Path]]) -> dict[str, dict]:
 
 def aggregate_records(records: list[CompareRecord]) -> dict[str, dict]:
     grouped: dict[str, dict[str, list[dict]]] = {}
+    task_specs: dict[str, dict[str, dict]] = {}
     for record in records:
         grouped.setdefault(record.task, {}).setdefault(record.variant, []).append(
             record.metrics
         )
+        specs = task_specs.setdefault(record.task, {})
+        for key, spec in record.specs.items():
+            specs.setdefault(key, spec)
 
     task_results = {}
     for task_name, variants in grouped.items():
@@ -494,6 +333,7 @@ def aggregate_records(records: list[CompareRecord]) -> dict[str, dict]:
             "variants": variant_names,
             "metrics": metrics,
             "metric_stats": metric_stats,
+            "specs": task_specs[task_name],
             "reference_indices": reference_indices,
             "sample_counts": {
                 variant: len(samples) for variant, samples in variants.items()
@@ -531,11 +371,16 @@ def build_compare_records(task_entries: list[tuple[str, Path]]) -> list[CompareR
         )}) if manifest else "legacy"
         identities.setdefault(context, set()).add(identity)
         collected.append((context, path, identity, manifest))
-    return [CompareRecord(
-        task=context[0],
-        variant=context[1] + (f"@{identity[:8]}" if len(identities[context]) > 1 else ""),
-        metrics=manifest.get("metrics", extract_metrics_summary(path)),
-    ) for context, path, identity, manifest in collected]
+    records = []
+    for context, path, identity, manifest in collected:
+        values, specs = manifest_metrics(manifest, path)
+        records.append(CompareRecord(
+            task=context[0],
+            variant=context[1] + (f"@{identity[:8]}" if len(identities[context]) > 1 else ""),
+            metrics=values,
+            specs=specs,
+        ))
+    return records
 
 
 def task_variant_contexts(task_entries: list[tuple[str, Path]]) -> list[tuple[str, str]]:
@@ -586,7 +431,8 @@ def entry_leaf(label: str, path: Path) -> str:
 
 def aggregate_metric_stats(samples: list[dict]) -> dict:
     stats = {}
-    for key, _label, _fmt in METRIC_DISPLAY:
+    keys = dict.fromkeys(key for sample in samples for key in sample)
+    for key in keys:
         value = aggregate_metric_value_stats([sample.get(key) for sample in samples])
         if value:
             stats[key] = value

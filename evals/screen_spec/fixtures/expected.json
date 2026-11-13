@@ -1,0 +1,109 @@
+{
+  "board_sha256": "036120d4290a83e141e6c4a251bbda79f054e9336c62f9b595b07b241679b26e",
+  "panes": [
+    {
+      "any_of": [
+        "Procedures"
+      ],
+      "position": "left"
+    },
+    {
+      "any_of": [
+        "Engagement 1"
+      ],
+      "position": "center"
+    },
+    {
+      "any_of": [
+        "Assistant",
+        "Procedure Description"
+      ],
+      "position": "right"
+    }
+  ],
+  "steps": [
+    {
+      "label": "Scoping",
+      "selected": true
+    },
+    {
+      "label": "01 Leadsheet",
+      "selected": false
+    },
+    {
+      "label": "02 Reconciliation",
+      "selected": false
+    },
+    {
+      "label": "03 Additions",
+      "selected": false
+    },
+    {
+      "label": "04a Transfers",
+      "selected": false
+    },
+    {
+      "label": "05 Disposals",
+      "selected": false
+    },
+    {
+      "label": "06 Verify Existence",
+      "selected": false
+    },
+    {
+      "label": "Workbook",
+      "selected": false
+    }
+  ],
+  "toggles": [
+    {
+      "label": "01 Leadsheet",
+      "on": true
+    },
+    {
+      "label": "02 Reconciliation",
+      "on": true
+    },
+    {
+      "label": "03 Additions",
+      "on": false
+    },
+    {
+      "label": "04a Transfers",
+      "on": true
+    },
+    {
+      "label": "05 Disposals",
+      "on": false
+    }
+  ],
+  "fields": [
+    {
+      "label": "Audit Client",
+      "value": "Client A"
+    },
+    {
+      "label": "Financial year-end",
+      "value": "Dec 31"
+    },
+    {
+      "label": "Currency",
+      "value": "Euro"
+    },
+    {
+      "label": "PM",
+      "value": "123"
+    },
+    {
+      "label": "CTT",
+      "value": "456"
+    }
+  ],
+  "messages_present": [
+    "Ich habe die Werte aus ATLAS kopiert",
+    "Your scoping has been successfully applied"
+  ],
+  "messages_absent": [
+    "Dein Scoping wurde"
+  ]
+}

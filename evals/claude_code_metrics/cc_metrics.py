@@ -3,6 +3,10 @@
 import json
 import logging
 import sys
+from numbers import Real
+from pathlib import Path
+
+COMPARE_METRICS_FILE = Path("metrics/claude_code_metrics.json")
 
 
 def aggregate_model_usage(metrics: list[dict]) -> dict:
@@ -158,6 +162,108 @@ def extract_skill_usage(claude_json_path: str) -> dict:
     }
 
 
+def is_number(value) -> bool:
+    return isinstance(value, Real) and not isinstance(value, bool)
+
+
+def get_number(data: dict, *keys: str):
+    for key in keys:
+        if is_number(data.get(key)):
+            return data[key]
+    return None
+
+
+def sum_numbers(*values):
+    numbers = [value for value in values if is_number(value)]
+    return sum(numbers) if numbers else None
+
+
+def allocate_token_costs(input_tokens, cache_tokens, output_tokens, cost_usd) -> dict:
+    """Split cost across token kinds proportionally to their token counts."""
+    tokens = {
+        "input": input_tokens if is_number(input_tokens) else None,
+        "cache": cache_tokens if is_number(cache_tokens) else None,
+        "output": output_tokens if is_number(output_tokens) else None,
+    }
+    total = sum_numbers(*tokens.values())
+    result = {f"{kind}_tokens": count for kind, count in tokens.items()}
+    result["total_tokens"] = total
+    for kind, count in tokens.items():
+        result[f"{kind}_token_cost_usd"] = (
+            cost_usd * (count or 0) / total if is_number(cost_usd) and total else None
+        )
+    return result
+
+
+def token_metrics(overall: dict) -> dict:
+    model_usage = overall.get("model_usage")
+    if not isinstance(model_usage, dict) or not model_usage:
+        usage = overall.get("usage")
+        if not isinstance(usage, dict):
+            usage = {}
+        return allocate_token_costs(
+            usage.get("input_tokens"),
+            sum_numbers(
+                usage.get("cache_creation_input_tokens"), usage.get("cache_read_input_tokens")
+            ),
+            usage.get("output_tokens"),
+            overall.get("total_cost_usd"),
+        )
+    total: dict = {}
+    for model in model_usage.values():
+        if not isinstance(model, dict):
+            continue
+        allocated = allocate_token_costs(
+            get_number(model, "inputTokens", "input_tokens"),
+            sum_numbers(
+                get_number(model, "cacheCreationInputTokens", "cache_creation_input_tokens"),
+                get_number(model, "cacheReadInputTokens", "cache_read_input_tokens"),
+            ),
+            get_number(model, "outputTokens", "output_tokens"),
+            get_number(model, "costUSD", "cost_usd", "total_cost_usd"),
+        )
+        for key, value in allocated.items():
+            total[key] = sum_numbers(total.get(key), value)
+    return total
+
+
+def compare_metrics(overall: dict) -> dict:
+    """Metrics shown by `ccbench compare`, with display metadata."""
+    tokens = token_metrics(overall)
+    duration_ms = overall.get("duration_ms")
+
+    def metric(value, label: str, fmt: str, change: str | None = None) -> dict:
+        entry = {"value": value if is_number(value) else None, "label": label, "format": fmt}
+        if change:
+            entry["change"] = change
+        return entry
+
+    return {
+        "cost_usd": metric(overall.get("total_cost_usd"), "Cost (USD)", "${:.4f}", "percent"),
+        "input_token_cost_usd": metric(tokens.get("input_token_cost_usd"), "Input token cost (USD)", "${:.4f}"),
+        "cache_token_cost_usd": metric(tokens.get("cache_token_cost_usd"), "Cache token cost (USD)", "${:.4f}"),
+        "output_token_cost_usd": metric(tokens.get("output_token_cost_usd"), "Output token cost (USD)", "${:.4f}"),
+        "duration_s": metric(
+            duration_ms / 1000 if isinstance(duration_ms, (int, float)) else None,
+            "Duration (s)",
+            "{:.1f}",
+            "percent",
+        ),
+        "turns": metric(overall.get("num_turns"), "Turns", "{:.0f}"),
+        "total_tokens": metric(tokens.get("total_tokens"), "Total tokens", "{:,.0f}", "percent"),
+        "input_tokens": metric(tokens.get("input_tokens"), "Input tokens", "{:,.0f}"),
+        "cache_tokens": metric(tokens.get("cache_tokens"), "Cache tokens", "{:,.0f}"),
+        "output_tokens": metric(tokens.get("output_tokens"), "Output tokens", "{:,.0f}", "percent"),
+    }
+
+
+def write_compare_metrics(overall: dict) -> None:
+    COMPARE_METRICS_FILE.parent.mkdir(exist_ok=True)
+    COMPARE_METRICS_FILE.write_text(
+        json.dumps({"eval": "claude_code_metrics", "metrics": compare_metrics(overall)}, indent=2)
+    )
+
+
 def main(cc_jsonl_output: str, target: str, claude_json_path: str | None = None):
     with open(cc_jsonl_output, "r") as f:
         content = [json.loads(line) for line in f.readlines() if line.strip()]
@@ -170,6 +276,7 @@ def main(cc_jsonl_output: str, target: str, claude_json_path: str | None = None)
     # Write metrics to file
     with open(target, "w") as f:
         json.dump(metrics, f, indent=2)
+    write_compare_metrics(metrics["overall"])
 
     print(f"Metrics extracted successfully to {target}")
     overall = metrics["overall"]

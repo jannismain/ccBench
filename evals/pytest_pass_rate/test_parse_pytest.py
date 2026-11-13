@@ -1,5 +1,7 @@
 """Tests for pytest log parsing (used by pytest_pass_rate eval)."""
 
+import json
+
 import pytest
 
 
@@ -80,3 +82,27 @@ def test_extract_failures():
     failures = extract_failures(log)
     assert len(failures) == 2
     assert "test_solution.py::test_big_numbers" in failures
+
+
+def test_main_without_tests_writes_empty_compare_metrics(tmp_path, monkeypatch):
+    from parse_pytest import main
+
+    monkeypatch.chdir(tmp_path)
+    main()
+
+    written = json.loads((tmp_path / "metrics" / "pytest_pass_rate.json").read_text())
+    assert written["eval"] == "pytest_pass_rate"
+    assert all(metric["value"] is None for metric in written["metrics"].values())
+
+
+def test_write_compare_metrics_maps_summary(tmp_path, monkeypatch):
+    from parse_pytest import write_compare_metrics
+
+    monkeypatch.chdir(tmp_path)
+    write_compare_metrics(
+        {"pass_rate": 0.5, "tests_passed": 1, "tests_failed": 1, "duration_s": 0.2}
+    )
+
+    written = json.loads((tmp_path / "metrics" / "pytest_pass_rate.json").read_text())
+    values = {key: metric["value"] for key, metric in written["metrics"].items()}
+    assert values == {"pass_rate": 0.5, "tests_passed": 1, "tests_failed": 1, "duration_s": 0.2}

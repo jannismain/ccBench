@@ -242,6 +242,19 @@ def count_details(details: list[dict]) -> tuple[int, int]:
     return errors, warnings
 
 
+COMPARE_METRICS_FILE = Path("metrics/static_analysis.json")
+
+
+def write_compare_metrics(errors: int | None, warnings: int | None) -> None:
+    """Contribute metrics to `ccbench compare`; None values render as missing."""
+    metrics = {
+        "lint_errors": {"value": errors, "label": "Lint errors", "format": "{:.0f}"},
+        "lint_warnings": {"value": warnings, "label": "Lint warnings", "format": "{:.0f}"},
+    }
+    COMPARE_METRICS_FILE.parent.mkdir(exist_ok=True)
+    COMPARE_METRICS_FILE.write_text(json.dumps({"eval": "static_analysis", "metrics": metrics}, indent=2))
+
+
 def main():
     output_file = Path("static_analysis.json")
     project_dir = Path("project")
@@ -249,6 +262,7 @@ def main():
     if not project_dir.is_dir():
         result = {"status": "skipped", "reason": "no project directory found"}
         output_file.write_text(json.dumps(result, indent=2))
+        write_compare_metrics(None, None)
         print("No project directory found, skipping.")
         return
 
@@ -259,6 +273,7 @@ def main():
             "reason": "no changed Python or JavaScript/TypeScript files found",
         }
         output_file.write_text(json.dumps(result, indent=2))
+        write_compare_metrics(None, None)
         print("No changed Python or JavaScript/TypeScript files found, skipping.")
         return
 
@@ -296,6 +311,7 @@ def main():
             "skipped_tools": skipped_tools,
         }
         output_file.write_text(json.dumps(result, indent=2))
+        write_compare_metrics(None, None)
         return
 
     errors, warnings = count_details(details)
@@ -311,6 +327,7 @@ def main():
     if skipped_tools:
         result["skipped_tools"] = skipped_tools
     output_file.write_text(json.dumps(result, indent=2))
+    write_compare_metrics(errors, warnings)
     print(
         f"Static analysis: {errors} errors, {warnings} warnings "
         f"in {files_analyzed} files"

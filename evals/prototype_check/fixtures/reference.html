@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Scoping</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 16px Helvetica, Arial, sans-serif; color: #1e1e1e; }
+  .screen { display: grid; grid-template-columns: 300px 1fr 290px; height: 640px; border: 2px solid #1e1e1e; margin: 20px; }
+  .pane { border-right: 2px solid #1e1e1e; }
+  .pane:last-child { border-right: 0; }
+  h2 { margin: 0; padding: 16px; border-bottom: 2px solid #1e1e1e; font-weight: 400; }
+  ol { list-style: none; margin: 0; padding: 0; }
+  li { padding: 12px 16px; }
+  li.active { background: #343a40; color: #fff; }
+  .form { padding: 16px 32px; }
+  .row { display: grid; grid-template-columns: 200px 1fr; padding: 6px 0; }
+  .row span:last-child { background: #f8f9fa; padding: 2px 8px; }
+  .switches label { display: block; padding: 10px 0; }
+  #chat { padding: 16px; display: flex; flex-direction: column; gap: 12px; height: 520px; }
+  #log { flex: 1; color: #6741d9; }
+  input.ask { width: 100%; padding: 8px; }
+</style>
+</head>
+<body>
+<div class="screen">
+  <section class="pane">
+    <h2>Procedures</h2>
+    <ol>
+      <li class="active">Scoping</li>
+      <li>01 Leadsheet</li>
+      <li>02 Reconciliation</li>
+      <li>03 Additions</li>
+      <li>04a Transfers</li>
+      <li>05 Disposals</li>
+      <li>06 Verify Existence</li>
+      <li>Workbook</li>
+    </ol>
+  </section>
+  <section class="pane">
+    <h2>Engagement 1</h2>
+    <div class="form">
+      <h3>Metadata</h3>
+      <div class="row"><span>Audit Client</span><span>Client A</span></div>
+      <div class="row"><span>Financial year-end</span><span>Dec 31</span></div>
+      <div class="row"><span>Currency</span><span>Euro</span></div>
+      <div class="row"><span>PM</span><span>123</span></div>
+      <div class="row"><span>CTT</span><span>456</span></div>
+      <h3>Determine applicable procedures</h3>
+      <div class="switches">
+        <label><input type="checkbox" checked> 01 Leadsheet</label>
+        <label><input type="checkbox" checked> 02 Reconciliation</label>
+        <label><input type="checkbox"> 03 Additions</label>
+        <label><input type="checkbox" checked> 04a Transfers</label>
+        <label><input type="checkbox"> 05 Disposals</label>
+      </div>
+    </div>
+  </section>
+  <section class="pane">
+    <h2>Procedure Description</h2>
+    <h2>Assistant</h2>
+    <div id="chat">
+      <div id="log"><p>Ich habe die Werte aus ATLAS kopiert: 01 Leadsheet yes, 02 Reconciliation no</p></div>
+      <input class="ask" type="text" placeholder="Type your question">
+    </div>
+  </section>
+</div>
+<script>
+  document.querySelectorAll('.switches input').forEach((box) => {
+    box.addEventListener('change', () => {
+      const p = document.createElement('p');
+      p.textContent = 'Your scoping has been successfully applied.';
+      document.getElementById('log').appendChild(p);
+    });
+  });
+</script>
+</body>
+</html>

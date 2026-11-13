@@ -15,6 +15,7 @@ from . import paths
 from .compare import (
     CompareRecord,
     aggregate_records,
+    manifest_metrics,
     render_grouped_comparison_json,
     render_grouped_comparison_table,
     resolve_task_dirs,
@@ -582,11 +583,13 @@ def compare_history(
             run_id = manifest["run_id"]
             if run_id not in seen:
                 seen.add(run_id)
+                values, specs = manifest_metrics(manifest, path)
                 records.append(
                     CompareRecord(
                         task=manifest["task"],
                         variant=manifest["variant"] if path == reference else baseline,
-                        metrics=manifest["metrics"],
+                        metrics=values,
+                        specs=specs,
                     )
                 )
                 manifests[run_id] = manifest

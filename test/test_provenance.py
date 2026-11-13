@@ -76,7 +76,12 @@ class TestHistoricalResults:
         (extra / "project" / "AGENTS.md").write_text("Be concise.\n")
         evaluator = tmp_path / "evals" / "score"
         evaluator.mkdir(parents=True)
-        (evaluator / "post.sh").write_text("echo '{\"score\": 1}' > exact_answer.json\n")
+        (evaluator / "post.sh").write_text(
+            "mkdir -p metrics\n"
+            "echo '{\"eval\": \"score\", \"metrics\": {\"points\": "
+            "{\"value\": 1, \"label\": \"Points\", \"format\": \"{:.0f}\"}}}' "
+            "> metrics/score.json\n"
+        )
         monkeypatch.setattr("ccbench.paths.TASKS", task.parent)
         monkeypatch.setattr("ccbench.paths.FORGE", base.parent)
         monkeypatch.setattr("ccbench.paths.EVALS", evaluator.parent)
@@ -143,6 +148,10 @@ class TestHistoricalResults:
             "baseline": 1,
             "new": 1,
         }
+        assert old["metrics"] == {"score.points": 1}
+        assert old["metric_specs"] == [{"key": "score.points", "label": "Points", "format": "{:.0f}"}]
+        assert saved["comparison"]["tasks"]["demo"]["metrics"]["score.points"] == [1, 1]
+        assert "Points" in result.output
 
     def test_content_change_rejects_baseline_and_duplicates_are_deduplicated(self, workspace):
         """Matching labels cannot hide changed shard contents or multiply copied samples."""

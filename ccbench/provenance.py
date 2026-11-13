@@ -389,7 +389,7 @@ def record_prepared(root: Path, env: dict) -> None:
 
 
 def finish_manifest(root: Path, state: str, env: dict) -> None:
-    from .compare import extract_metrics_summary
+    from .compare import eval_names, load_metrics
     from .scripts import load_script_statuses
 
     manifest = load_manifest(root)
@@ -400,7 +400,9 @@ def finish_manifest(root: Path, state: str, env: dict) -> None:
         item.get("return_code") != 0 for item in manifest["scripts"].values()
     ):
         manifest["state"] = "completed_with_errors"
-    manifest["metrics"] = extract_metrics_summary(root)
+    manifest["metrics"], specs = load_metrics(root, eval_names(manifest))
+    # A list keeps the evals' row order; the manifest is written with sorted keys.
+    manifest["metric_specs"] = [{"key": key, **spec} for key, spec in specs.items()]
     manifest["observed_models"] = observed_models(root)
     manifest["runtime_after"] = collect_runtime(root, env, manifest)
     observations = root / ".ccbench" / "claude_code.versions"

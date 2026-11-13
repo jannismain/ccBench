@@ -347,6 +347,38 @@ export MY_TOOL_INSTALLED=true
 my-tool analyze .
 ```
 
+### Contributing Metrics from Evals
+
+`ccbench compare` knows nothing about individual evals. Each eval contributes the
+metrics it wants compared by writing `metrics/<eval>.json` relative to the task
+root (the working directory of eval scripts):
+
+```json
+{
+  "eval": "readability",
+  "metrics": {
+    "words": {"value": 812, "label": "Answer words", "format": "{:,.0f}", "change": "percent"},
+    "gunning_fog": {"value": 9.3, "label": "Gunning fog", "format": "{:.1f}"}
+  }
+}
+```
+
+- `value` is a number or `null`; `null` renders as `—`. Write `null` values when the
+  eval is skipped or fails so a stale file from an earlier attempt is overwritten.
+- `label` is the row name in the comparison table.
+- `format` is a Python format string applied to the value, the mean, and the range
+  (e.g. `"${:.4f}"`, `"{:.0%}"`, `"{:.0f}/5"`). Defaults to `"{}"`.
+- `change: "percent"` adds the percent change against the baseline variant.
+
+Metrics are keyed as `<eval>.<metric>` in `compare --json` output and in run
+manifests, which also store the labels and formats so historical results render
+even after an eval changes. Rows appear in the order of the experiment's `evals:`
+list. Keep the detailed eval output in its own file (e.g. `readability.json`);
+`metrics/` holds only what should be compared.
+
+Results recorded before evals wrote `metrics/` are read by frozen legacy
+extractors in `ccbench/legacy_metrics.py`. Do not extend that module for new evals.
+
 ## Creating Experiments
 
 ### Finding reusable historical baselines

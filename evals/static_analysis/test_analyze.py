@@ -156,3 +156,15 @@ def test_main_aggregates_python_and_js_ts_results(tmp_path, monkeypatch):
     assert result["files_analyzed"] == 2
     assert result["files_by_language"] == {"python": 1, "javascript": 1}
     assert [detail["tool"] for detail in result["details"]] == ["ruff", "eslint"]
+    metrics = json.loads((tmp_path / "metrics" / "static_analysis.json").read_text())
+    assert metrics["metrics"]["lint_errors"]["value"] == 1
+    assert metrics["metrics"]["lint_warnings"]["value"] == 1
+
+
+def test_main_without_project_writes_empty_compare_metrics(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    analyzer.main()
+
+    metrics = json.loads((tmp_path / "metrics" / "static_analysis.json").read_text())
+    assert metrics["metrics"]["lint_errors"]["value"] is None

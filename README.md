@@ -109,6 +109,8 @@ categories from the reported model costs.
 
 ccBench includes several evaluation tools to analyze the results of experiments:
 
+Each eval writes its own comparison metrics to `metrics/<eval>.json`; see [Contributing Metrics from Evals](USER_GUIDE.md#contributing-metrics-from-evals).
+
 ### `cloc` - Code Line Counter
 
 Counts the lines of code in files changed by the agent inside `project/`, based on git diff plus untracked files. This includes both newly created files and modifications to existing tracked files. Generated build/cache directories and package-manager lockfiles such as `package-lock.json` are excluded.
@@ -134,3 +136,9 @@ Extracts detailed performance metrics from Claude Code's `output.json` file, inc
 - **Web search requests:** Number of web searches performed
 
 **Output:** `claude_code_metrics.json` - Contains all extracted metrics in JSON format.
+
+### `readability` - Answer Readability
+
+Scores the agent's answers (one per `result` event in `output.json`) for tasks where the output is prose rather than code. With several prompts, top-level metrics pool all answers, `stats` holds the per-answer mean/min/max, and `answers` lists each answer's metrics. Code blocks and markdown markup are stripped before scoring. Reports word and sentence counts, Flesch reading ease, Flesch-Kincaid grade, Gunning fog, and markdown structure counts (headings, list items, code blocks, bold spans, em dashes).
+
+**Output:** `readability.json`

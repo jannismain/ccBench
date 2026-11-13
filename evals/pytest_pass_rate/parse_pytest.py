@@ -85,12 +85,28 @@ def has_test_files() -> bool:
     return bool(list(cwd.glob("test_*.py")) or list(cwd.glob("*_test.py")))
 
 
+COMPARE_METRICS_FILE = Path("metrics/pytest_pass_rate.json")
+
+
+def write_compare_metrics(summary: dict) -> None:
+    """Contribute metrics to `ccbench compare`; None values render as missing."""
+    metrics = {
+        "pass_rate": {"value": summary.get("pass_rate"), "label": "Test pass rate", "format": "{:.0%}"},
+        "tests_passed": {"value": summary.get("tests_passed"), "label": "Tests passed", "format": "{:.0f}"},
+        "tests_failed": {"value": summary.get("tests_failed"), "label": "Tests failed", "format": "{:.0f}"},
+        "duration_s": {"value": summary.get("duration_s"), "label": "Test duration (s)", "format": "{:.2f}"},
+    }
+    COMPARE_METRICS_FILE.parent.mkdir(exist_ok=True)
+    COMPARE_METRICS_FILE.write_text(json.dumps({"eval": "pytest_pass_rate", "metrics": metrics}, indent=2))
+
+
 def main():
     output_file = Path("test_pass_rate.json")
 
     if not has_test_files():
         result = {"status": "skipped", "reason": "no test files found"}
         output_file.write_text(json.dumps(result, indent=2))
+        write_compare_metrics({})
         print("No test files found, skipping.")
         return
 
@@ -98,6 +114,7 @@ def main():
     if log_file is None:
         result = {"status": "error", "reason": "test files found but no pytest output in logs"}
         output_file.write_text(json.dumps(result, indent=2))
+        write_compare_metrics({})
         print("Warning: test files exist but no pytest output found in logs.", file=sys.stderr)
         return
 
@@ -106,12 +123,14 @@ def main():
     if summary is None:
         result = {"status": "error", "reason": f"could not parse pytest summary from {log_file.name}"}
         output_file.write_text(json.dumps(result, indent=2))
+        write_compare_metrics({})
         print(f"Warning: could not parse pytest output from {log_file.name}.", file=sys.stderr)
         return
 
     failures = extract_failures(log_text)
     result = {"status": "completed", **summary, "failures": failures}
     output_file.write_text(json.dumps(result, indent=2))
+    write_compare_metrics(summary)
 
     print(f"Test pass rate: {summary['tests_passed']}/{summary['tests_run']}"
           f" ({summary['pass_rate']:.0%})")

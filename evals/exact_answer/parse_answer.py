@@ -198,6 +198,16 @@ def check_answer(text: str, expected_text: str) -> tuple[bool, str | None]:
     return False, None
 
 
+COMPARE_METRICS_FILE = Path("metrics/exact_answer.json")
+
+
+def write_compare_metrics(score: int | None) -> None:
+    """Contribute metrics to `ccbench compare`; None values render as missing."""
+    metrics = {"score": {"value": score, "label": "Exact answer", "format": "{:.0f}/1"}}
+    COMPARE_METRICS_FILE.parent.mkdir(exist_ok=True)
+    COMPARE_METRICS_FILE.write_text(json.dumps({"eval": "exact_answer", "metrics": metrics}, indent=2))
+
+
 def main() -> None:
     expected = os.getenv("EXACT_ANSWER_EXPECTED", DEFAULT_EXPECTED)
     output_file = Path("exact_answer.json")
@@ -205,6 +215,7 @@ def main() -> None:
     if not text.strip():
         result = {"status": "error", "reason": "no agent output found", "sources": sources}
         output_file.write_text(json.dumps(result, indent=2))
+        write_compare_metrics(None)
         print("Error: no agent output found", file=sys.stderr)
         return
 
@@ -218,6 +229,7 @@ def main() -> None:
         "sources": sources,
     }
     output_file.write_text(json.dumps(result, indent=2))
+    write_compare_metrics(result["score"])
     print(f"Exact answer matched: {matched}")
 
 
