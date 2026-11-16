@@ -9,7 +9,10 @@ export CLAUDE=${CLAUDE:-~/.local/bin/claude}
 CLAUDE_LOCAL_SETTINGS_ARG="--setting-sources project"
 CLAUDE_OPTS="--print --verbose --output-format stream-json --dangerously-skip-permissions ${CLAUDE_LOCAL_SETTINGS_ARG}"
 
-if [ -f prompt.md ]; then
+if [ -d prompts ]; then
+    echo "Using prompts/*.md as consecutive turns of one session"
+    PROMPT=""
+elif [ -f prompt.md ]; then
     echo "Using prompt.md"
     PROMPT="$(cat prompt.md)"
 elif [ -n "${AGENT_PROMPT:-}" ]; then
@@ -23,4 +26,13 @@ fi
 cd project
 $CLAUDE $CLAUDE_LOCAL_SETTINGS_ARG plugins list | tee -a ../claude_code_environment.md
 $CLAUDE $CLAUDE_LOCAL_SETTINGS_ARG mcp list | tee -a ../claude_code_environment.md
-$CLAUDE $CLAUDE_OPTS "$PROMPT" | tee -a ../output.json
+if [ -d ../prompts ]; then
+    CONTINUE_ARG=""
+    for prompt_file in ../prompts/*.md; do
+        echo "Prompt: ${prompt_file#../}"
+        $CLAUDE $CLAUDE_OPTS $CONTINUE_ARG "$(cat "$prompt_file")" | tee -a ../output.json
+        CONTINUE_ARG="--continue"
+    done
+else
+    $CLAUDE $CLAUDE_OPTS "$PROMPT" | tee -a ../output.json
+fi

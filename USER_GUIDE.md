@@ -559,6 +559,10 @@ evals:
 - **configs** - Base config shards overlaid onto the copied task for all variants
 - **evals** - Evaluation scripts to run after task completion
 
+### Multi-turn Tasks
+
+With the `claude_code` config shard, a task can provide a `prompts/` directory instead of `prompt.md`. Each `prompts/*.md` file is sent in sorted order as the next turn of the same session (`--continue`), and all turns are appended to `output.json`. `claude_code_metrics` sums usage across turns, and `readability` reports pooled and per-answer metrics. See `tasks/three-questions/` for an example.
+
 ### Running Specific Variants
 
 Use the `--variant` flag to run only one variant:
