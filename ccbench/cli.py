@@ -68,14 +68,49 @@ def run(
 
 @app.command()
 def compare(
-    result_dirs: Annotated[list[str] | None, typer.Argument()] = None,
-    across: Annotated[bool, typer.Option("--across/--no-across")] = False,
-    json_output: Annotated[bool, typer.Option("--json/--no-json")] = False,
-    baseline_history: Annotated[bool, typer.Option("--baseline-history")] = False,
-    baseline: Annotated[str, typer.Option()] = "baseline",
-    history_dir: Annotated[Path | None, typer.Option()] = None,
-    policy: Annotated[Path | None, typer.Option()] = None,
-    report: Annotated[Path | None, typer.Option()] = None,
+    result_dirs: Annotated[
+        list[str] | None,
+        typer.Argument(
+            help="Experiment or task result directories (default: most recent result).",
+            show_default=False,
+        ),
+    ] = None,
+    across: Annotated[
+        bool,
+        typer.Option(
+            "--across/--no-across",
+            help="Prefix task labels with their result directory name.",
+        ),
+    ] = False,
+    json_output: Annotated[
+        bool, typer.Option("--json/--no-json", help="Print JSON instead of tables.")
+    ] = False,
+    baseline_history: Annotated[
+        bool,
+        typer.Option(
+            "--baseline-history",
+            help="Compare against eligible historical baseline runs.",
+        ),
+    ] = False,
+    baseline: Annotated[
+        str, typer.Option(help="Variant name of the historical baseline.")
+    ] = "baseline",
+    history_dir: Annotated[
+        Path | None,
+        typer.Option(
+            help="Directory scanned for historical runs "
+            "(default: $CCBENCH_RESULT or ~/.ccbench/results).",
+        ),
+    ] = None,
+    policy: Annotated[
+        Path | None, typer.Option(help="YAML policy for historical run compatibility.")
+    ] = None,
+    report: Annotated[
+        Path | None,
+        typer.Option(
+            help="Comparison report path (default: under <history-dir>/comparisons/)."
+        ),
+    ] = None,
 ) -> None:
     """Compare experiment results."""
     if baseline_history:

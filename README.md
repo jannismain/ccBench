@@ -94,6 +94,34 @@ more `--eval` flags replaces that default list with the evals you specify.
 Retry uses each task directory's `.ccbench-status.json` to find failed steps.
 Use repeated `--step` flags to retry exact script names or globs manually.
 
+### Comparing Results
+
+```shell
+uv run ccbench compare [OPTIONS] [RESULT_DIRS]...
+```
+
+- `RESULT_DIRS` - Experiment result directories (containing `tasks/`) or individual task result directories. Defaults to the most recent directory in `~/.ccbench/results`
+- `--across` - Prefix task labels with their result directory name, so the same task from different experiment results is reported separately
+- `--json` - Print the comparison as JSON instead of tables; with `--baseline-history`, print the full comparison report
+- `--baseline-history` - Compare the given results against eligible historical baseline runs instead of only the given directories
+- `--baseline NAME` - Variant name of the historical baseline (default: `baseline`)
+- `--history-dir PATH` - Directory scanned for historical runs (default: `$CCBENCH_RESULT` or `~/.ccbench/results`)
+- `--policy PATH` - YAML policy defining which historical runs are compatible; see [the user guide](USER_GUIDE.md#finding-reusable-historical-baselines)
+- `--report PATH` - Write the comparison report to this file (default: under `<history-dir>/comparisons/`); existing files are never overwritten
+
+`--baseline`, `--history-dir`, `--policy`, and `--report` require `--baseline-history`.
+
+```shell
+# Compare the most recent experiment result
+uv run ccbench compare
+
+# Compare two experiment results, keeping their tasks apart
+uv run ccbench compare ~/.ccbench/results/20260417_164519_simple ~/.ccbench/results/20260418_091200_simple --across
+
+# Compare new runs against compatible historical baselines
+uv run ccbench compare ~/.ccbench/results/20260418_091200_simple --baseline-history --policy comparison.yaml
+```
+
 Compare output reports one table per task, with variants as columns and sample
 counts in each header, such as `baseline (n=3)`. If multiple results exist for
 the same task and variant, numeric metrics are averaged before rendering and

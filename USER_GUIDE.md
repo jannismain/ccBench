@@ -565,6 +565,27 @@ With the `claude_code` config shard, a task can provide a `prompts/` directory i
 
 ### Running Specific Variants
 
+All selected task × variant × run combinations execute concurrently, including
+staging and setup. Within each combination, scripts keep their normal order.
+Set top-level `runs` in the experiment YAML to repeat every combination, or override
+it from the CLI:
+
+```bash
+uv run ccbench my_experiment.yaml -n 5
+```
+
+The count must be a positive integer. `-n` also works with ad-hoc experiments and
+`--skip-run`. Repeats have separate workspaces, environments, logs, and status files
+under `tasks/<task>_<variant>_run_<number>` in one result directory. A single run
+keeps the existing directory names. The saved YAML records the effective count;
+`compare` groups repeats by task and variant and reports sample counts, means,
+and ranges. `retry` can target an individual repeat using its directory name.
+
+Parallel jobs do not read shared terminal input; scripts must run unattended.
+A single job retains interactive terminal support. Console output may interleave;
+each script's `.log` file contains its own output. Shards that write to shared
+external locations must handle concurrent access themselves.
+
 Use the `--variant` flag to run only one variant:
 
 ```bash
